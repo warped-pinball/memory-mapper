@@ -51,7 +51,7 @@ jobs:
         shell: bash
         run: |
           PACKAGE_VERSION="${GITHUB_REF_NAME#v}"
-          RELEASE_BASENAME="warped-pinball-dash-memory-mapper-${{ matrix.platform_slug }}-${PACKAGE_VERSION}"
+          RELEASE_BASENAME="warped-pinball-memory-mapper-${{ matrix.platform_slug }}-${PACKAGE_VERSION}"
           if [ -n "${{ matrix.artifact_extension }}" ]; then
             RELEASE_FILENAME="${RELEASE_BASENAME}.${{ matrix.artifact_extension }}"
           else

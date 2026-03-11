@@ -41,6 +41,24 @@ memory-mapper --group 239.1.2.3 --port 2040 --highlight-duration 5
 
 ---
 
+
+### Interactive scan workflow
+
+The UI now runs in a full-screen terminal mode and shows a dedicated menu above the memory map.
+Use single-key commands to iteratively filter memory offsets based on how each byte changed since the previous scan capture:
+
+- `C` = changed
+- `N` = unchanged
+- `I` = increased
+- `D` = decreased
+- `R` = reset scan state
+- `Q` = quit
+
+Matches are color-coded with a legend:
+- green = hard matches (met all scan steps)
+- cyan/magenta = soft matches (missed one or two steps)
+- yellow = recently changed bytes
+
 ## Message format
 
 Send raw UDP multicast datagrams whose payload is the full memory snapshot as a contiguous byte array.  
@@ -79,11 +97,11 @@ Each push to `main` and every version tag (`v*`) triggers the [Build & Release](
 
 | Platform | Artifact |
 |----------|----------|
-| Linux (Ubuntu) | `warped-pinball-dash-memory-mapper-linux-amd64-<version>.deb` |
-| macOS    | `warped-pinball-dash-memory-mapper-macos-<version>` |
-| Windows  | `warped-pinball-dash-memory-mapper-windows-<version>.exe` |
+| Linux (Ubuntu) | `warped-pinball-memory-mapper-linux-amd64-<version>.deb` |
+| macOS    | `warped-pinball-memory-mapper-macos-<version>` |
+| Windows  | `warped-pinball-memory-mapper-windows-<version>.exe` |
 
-On Ubuntu, download the `.deb` package and open it to install (or run `sudo apt install ./warped-pinball-dash-memory-mapper-linux-amd64-<version>.deb`). This installs a `memory-mapper` command in `/usr/local/bin` without requiring Python to be preinstalled.
+On Ubuntu, download the `.deb` package and open it to install (or run `sudo apt install ./warped-pinball-memory-mapper-linux-amd64-<version>.deb`). This installs a `memory-mapper` command in `/usr/local/bin` without requiring Python to be preinstalled.
 
 Download the appropriate artifact from the **Actions** tab or from the **Releases** page.
 

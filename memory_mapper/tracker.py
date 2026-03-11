@@ -2,7 +2,26 @@
 
 import time
 from collections import deque
+from dataclasses import dataclass
 from typing import Deque, Dict, Optional, Set
+
+SCAN_MODES = {
+    "c": "changed",
+    "n": "unchanged",
+    "i": "increased",
+    "d": "decreased",
+}
+
+
+@dataclass
+class ScanStats:
+    """Summary of the iterative scan state for UI rendering."""
+
+    steps: int = 0
+    compared_bytes: int = 0
+    hard_match_count: int = 0
+    soft_match_count_1: int = 0
+    soft_match_count_2: int = 0
 
 
 class MemoryTracker:
@@ -18,6 +37,11 @@ class MemoryTracker:
         self.sender_packet_counts: Dict[str, int] = {}
         self.latest_sender: Optional[str] = None
 
+        self.scan_baseline: Optional[bytes] = None
+        self.scan_steps: list[str] = []
+        self.scan_hits: Dict[int, int] = {}
+        self.scan_total: Dict[int, int] = {}
+
     def update(self, data: bytes, sender: Optional[str] = None) -> Set[int]:
         """Update the stored snapshot and return the set of changed byte indices."""
         now = time.monotonic()
@@ -29,7 +53,6 @@ class MemoryTracker:
                 if self.snapshot[i] != data[i]:
                     changed.add(i)
                     self.change_times[i] = now
-            # Bytes beyond the previous length are treated as new / changed
             for i in range(min_len, len(data)):
                 changed.add(i)
                 self.change_times[i] = now
@@ -42,6 +65,91 @@ class MemoryTracker:
             self.latest_sender = sender
             self.sender_packet_counts[sender] = self.sender_packet_counts.get(sender, 0) + 1
         return changed
+
+    def apply_scan(self, mode_key: str) -> bool:
+        """Apply an iterative scan comparison against the previous captured snapshot."""
+        if self.snapshot is None or mode_key not in SCAN_MODES:
+            return False
+
+        if self.scan_baseline is None:
+            self.scan_baseline = bytes(self.snapshot)
+            return False
+
+        current = self.snapshot
+        baseline = self.scan_baseline
+        compare_len = min(len(current), len(baseline))
+        if compare_len == 0:
+            self.scan_baseline = bytes(current)
+            return False
+
+        self.scan_steps.append(mode_key)
+
+        for index in range(compare_len):
+            old = baseline[index]
+            new = current[index]
+            matched = self._mode_matches(mode_key, old, new)
+
+            self.scan_total[index] = self.scan_total.get(index, 0) + 1
+            if matched:
+                self.scan_hits[index] = self.scan_hits.get(index, 0) + 1
+
+        self.scan_baseline = bytes(current)
+        return True
+
+    def _mode_matches(self, mode_key: str, old: int, new: int) -> bool:
+        if mode_key == "c":
+            return new != old
+        if mode_key == "n":
+            return new == old
+        if mode_key == "i":
+            return new > old
+        if mode_key == "d":
+            return new < old
+        return False
+
+    def reset_scan(self) -> None:
+        self.scan_baseline = bytes(self.snapshot) if self.snapshot is not None else None
+        self.scan_steps = []
+        self.scan_hits = {}
+        self.scan_total = {}
+
+    def scan_stats(self) -> ScanStats:
+        compared = len(self.scan_total)
+        hard = 0
+        soft1 = 0
+        soft2 = 0
+        for index, total in self.scan_total.items():
+            hits = self.scan_hits.get(index, 0)
+            misses = total - hits
+            if misses == 0 and total > 0:
+                hard += 1
+            elif misses == 1:
+                soft1 += 1
+            elif misses == 2:
+                soft2 += 1
+
+        return ScanStats(
+            steps=len(self.scan_steps),
+            compared_bytes=compared,
+            hard_match_count=hard,
+            soft_match_count_1=soft1,
+            soft_match_count_2=soft2,
+        )
+
+    def scan_match_level(self, index: int) -> int:
+        """Return match level for a byte (0=none, 1=soft miss1, 2=soft miss2, 3=hard)."""
+        total = self.scan_total.get(index, 0)
+        if total == 0:
+            return 0
+        hits = self.scan_hits.get(index, 0)
+        misses = total - hits
+        if misses == 0:
+            return 3
+        if misses == 1:
+            return 2
+        if misses == 2:
+            return 1
+        return 0
 
     def packets_per_second(self) -> float:
         """Return an average packet frequency over the recent packet window."""

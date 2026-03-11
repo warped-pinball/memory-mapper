@@ -153,3 +153,40 @@ class TestMemoryTrackerStats:
         t.update(b"\x00", sender="10.0.0.1")
         t.update(b"\x00", sender="10.0.0.2")
         assert t.known_senders() == ["10.0.0.2", "10.0.0.1"]
+
+
+class TestMemoryTrackerScanWorkflow:
+    def test_first_scan_captures_baseline_only(self):
+        t = MemoryTracker()
+        t.update(b"\x01\x02")
+        assert not t.apply_scan("c")
+        assert t.scan_stats().steps == 0
+
+    def test_scan_hard_and_soft_matches(self):
+        t = MemoryTracker()
+        t.update(b"\x05\x05\x05")
+        t.apply_scan("c")
+
+        t.update(b"\x06\x05\x04")
+        assert t.apply_scan("i")
+
+        t.update(b"\x07\x05\x03")
+        assert t.apply_scan("i")
+
+        stats = t.scan_stats()
+        assert stats.steps == 2
+        assert stats.hard_match_count == 1
+        assert t.scan_match_level(0) == 3
+        assert t.scan_match_level(2) == 1
+
+    def test_reset_scan_clears_state(self):
+        t = MemoryTracker()
+        t.update(b"\x01")
+        t.apply_scan("c")
+        t.update(b"\x02")
+        t.apply_scan("i")
+
+        t.reset_scan()
+
+        assert t.scan_stats().steps == 0
+        assert t.scan_match_level(0) == 0
