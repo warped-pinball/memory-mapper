@@ -79,11 +79,11 @@ Each push to `main` and every version tag (`v*`) triggers the [Build & Release](
 
 | Platform | Artifact |
 |----------|----------|
-| Linux (Ubuntu) | `memory-mapper-linux-amd64.deb` |
-| macOS    | `memory-mapper-macos` |
-| Windows  | `memory-mapper-windows.exe` |
+| Linux (Ubuntu) | `warped-pinball-dash-memory-mapper-linux-amd64-<version>.deb` |
+| macOS    | `warped-pinball-dash-memory-mapper-macos-<version>` |
+| Windows  | `warped-pinball-dash-memory-mapper-windows-<version>.exe` |
 
-On Ubuntu, download the `.deb` package and open it to install (or run `sudo apt install ./memory-mapper-linux-amd64.deb`). This installs a `memory-mapper` command in `/usr/local/bin` without requiring Python to be preinstalled.
+On Ubuntu, download the `.deb` package and open it to install (or run `sudo apt install ./warped-pinball-dash-memory-mapper-linux-amd64-<version>.deb`). This installs a `memory-mapper` command in `/usr/local/bin` without requiring Python to be preinstalled.
 
 Download the appropriate artifact from the **Actions** tab or from the **Releases** page.
 
