@@ -1,7 +1,8 @@
-"""Tracks memory snapshots and detects recently changed byte addresses."""
+"""Tracks memory snapshots, sender stats, and recently changed byte addresses."""
 
 import time
-from typing import Dict, Optional, Set
+from collections import deque
+from typing import Deque, Dict, Optional, Set
 
 
 class MemoryTracker:
@@ -13,8 +14,11 @@ class MemoryTracker:
         self.change_times: Dict[int, float] = {}
         self.packet_count: int = 0
         self.last_update: Optional[float] = None
+        self.packet_times: Deque[float] = deque(maxlen=256)
+        self.sender_packet_counts: Dict[str, int] = {}
+        self.latest_sender: Optional[str] = None
 
-    def update(self, data: bytes) -> Set[int]:
+    def update(self, data: bytes, sender: Optional[str] = None) -> Set[int]:
         """Update the stored snapshot and return the set of changed byte indices."""
         now = time.monotonic()
         changed: Set[int] = set()
@@ -33,7 +37,33 @@ class MemoryTracker:
         self.snapshot = bytes(data)
         self.packet_count += 1
         self.last_update = now
+        self.packet_times.append(now)
+        if sender:
+            self.latest_sender = sender
+            self.sender_packet_counts[sender] = self.sender_packet_counts.get(sender, 0) + 1
         return changed
+
+    def packets_per_second(self) -> float:
+        """Return an average packet frequency over the recent packet window."""
+        if len(self.packet_times) < 2:
+            return 0.0
+        elapsed = self.packet_times[-1] - self.packet_times[0]
+        if elapsed <= 0:
+            return 0.0
+        return (len(self.packet_times) - 1) / elapsed
+
+    def data_age_seconds(self) -> Optional[float]:
+        """Return seconds since the latest packet, or None when no data exists."""
+        if self.last_update is None:
+            return None
+        return max(0.0, time.monotonic() - self.last_update)
+
+    def known_senders(self) -> list[str]:
+        """Return known sender IPs sorted by descending packet count then IP."""
+        return sorted(
+            self.sender_packet_counts,
+            key=lambda ip: (-self.sender_packet_counts[ip], ip),
+        )
 
     def recently_changed(self, index: int) -> bool:
         """Return True if the byte at *index* changed within the highlight window."""

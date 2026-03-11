@@ -58,7 +58,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_BYTES_PER_ROW,
         metavar="N",
-        help=f"Number of bytes displayed per row (default: {DEFAULT_BYTES_PER_ROW})",
+        help=(
+            "Minimum number of bytes displayed per row; rows auto-expand when terminal "
+            f"is wider (default: {DEFAULT_BYTES_PER_ROW})"
+        ),
+    )
+    parser.add_argument(
+        "--source-filter",
+        default=None,
+        help="Only process packets from this sender IP (default: all senders)",
     )
     return parser
 
@@ -77,7 +85,9 @@ def main(argv=None) -> int:
     tracker = MemoryTracker(highlight_duration=args.highlight_duration)
 
     def on_packet(data: bytes, sender: str) -> None:
-        tracker.update(data)
+        if args.source_filter and sender != args.source_filter:
+            return
+        tracker.update(data, sender=sender)
 
     stop_event = threading.Event()
 
@@ -91,6 +101,7 @@ def main(argv=None) -> int:
     display = MemoryDisplay(
         tracker,
         bytes_per_row=args.bytes_per_row,
+        active_filter=args.source_filter,
     )
 
     try:

@@ -13,6 +13,7 @@ class TestBuildParser:
         assert args.port == 2040
         assert args.highlight_duration == 3.0
         assert args.bytes_per_row == 16
+        assert args.source_filter is None
 
     def test_custom_group(self):
         parser = build_parser()
@@ -43,3 +44,9 @@ class TestBuildParser:
         parser = build_parser()
         with pytest.raises(SystemExit):
             parser.parse_args(["--highlight-duration", "bad"])
+
+
+    def test_custom_source_filter(self):
+        parser = build_parser()
+        args = parser.parse_args(["--source-filter", "10.0.0.9"])
+        assert args.source_filter == "10.0.0.9"
