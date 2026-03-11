@@ -68,7 +68,7 @@ def _render_menu(tracker: MemoryTracker, active_filter: Optional[str], status_me
         f"[bold]Soft(1 miss):[/bold] {stats.soft_match_count_1}  [bold]Soft(2 misses):[/bold] {stats.soft_match_count_2}"
     )
 
-    menu.add_row("  ".join(sender_bits), metrics)
+    menu.add_row(" ".join(sender_bits), metrics)
     menu.add_row(commands, "")
     menu.add_row(f"[bold]Status:[/bold] {status_message}", "")
     return Panel(menu, border_style="bright_black", padding=(0, 1), title="[bold]Menu[/bold]")
@@ -109,33 +109,28 @@ def render_snapshot(
     if snapshot is None:
         body = Text("Waiting for data…", style=DIM_STYLE, justify="center")
         memory_panel = Panel(body, title="[bold]Memory Mapper[/bold]", border_style="bright_blue")
-        return Group(menu_panel, _render_legend(), memory_panel)
+        return Group(memory_panel, _render_legend(), menu_panel)
 
     tracker.cleanup_old_changes()
 
     effective_bpr = _auto_bytes_per_row(terminal_width, bytes_per_row)
     size = len(snapshot)
 
-    table = Table(
-        show_header=True,
-        header_style=HEADER_STYLE,
-        box=None,
-        padding=(0, 0),
-        collapse_padding=True,
-        expand=True,
-    )
-    table.add_column("Off", style="bright_cyan", no_wrap=True)
+    memory_text = Text()
+    header = Text("Off", style="bright_cyan")
     for col in range(effective_bpr):
-        table.add_column(f"{col:02X}", no_wrap=True, min_width=2, justify="center")
+        header.append(" ")
+        header.append(f"{col:02X}", style=HEADER_STYLE)
+    memory_text.append(header)
 
     for row_start in range(0, size, effective_bpr):
         row_bytes = snapshot[row_start : row_start + effective_bpr]
-        cells = [Text(f"{byte:02X}", style=_byte_style(tracker, row_start + col)) for col, byte in enumerate(row_bytes)]
-
-        while len(cells) < effective_bpr:
-            cells.append(Text("  "))
-
-        table.add_row(Text(f"{row_start:04X}", style="bright_cyan"), *cells)
+        line = Text("\n")
+        line.append(f"{row_start:04X}", style="bright_cyan")
+        for col, byte in enumerate(row_bytes):
+            line.append(" ")
+            line.append(f"{byte:02X}", style=_byte_style(tracker, row_start + col))
+        memory_text.append(line)
 
     status = (
         f"[dim]Packets[/dim] [bold]{tracker.packet_count}[/bold]  "
@@ -144,13 +139,13 @@ def render_snapshot(
     )
 
     memory_panel = Panel(
-        table,
+        memory_text,
         title="[bold bright_blue]Memory Mapper[/bold bright_blue]",
         subtitle=status,
         border_style="bright_blue",
         expand=True,
     )
-    return Group(menu_panel, _render_legend(), memory_panel)
+    return Group(memory_panel, _render_legend(), menu_panel)
 
 
 class MemoryDisplay:

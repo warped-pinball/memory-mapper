@@ -91,11 +91,6 @@ def main(argv=None) -> int:
 
     stop_event = threading.Event()
 
-    print(
-        f"Listening for UDP multicast on {args.group}:{args.port} … "
-        "press Ctrl-C to quit."
-    )
-
     receiver_thread = start_receiver(args.group, args.port, on_packet, stop_event)
 
     display = MemoryDisplay(

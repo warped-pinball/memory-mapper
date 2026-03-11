@@ -89,3 +89,36 @@ class TestRenderSnapshotWithData:
         buf = StringIO()
         console = Console(file=buf, width=200)
         console.print(render_snapshot(t))
+
+    def test_memory_bytes_use_single_spaces(self):
+        t = MemoryTracker()
+        t.update(bytes(range(16)))
+        from rich.console import Console
+        from io import StringIO
+
+        buf = StringIO()
+        console = Console(file=buf, width=120)
+        console.print(render_snapshot(t))
+        output = buf.getvalue()
+        assert "00 01 02 03" in output
+        assert "00  01" not in output
+
+    def test_layout_order_memory_then_legend_then_menu(self):
+        t = MemoryTracker()
+        t.update(b"\x00")
+        from rich.console import Console
+        from io import StringIO
+
+        buf = StringIO()
+        console = Console(file=buf, width=120)
+        console.print(render_snapshot(t))
+        output = buf.getvalue()
+
+        memory_index = output.find("Memory Mapper")
+        legend_index = output.find("Legend")
+        menu_index = output.find("Menu")
+
+        assert memory_index != -1
+        assert legend_index != -1
+        assert menu_index != -1
+        assert memory_index < legend_index < menu_index
