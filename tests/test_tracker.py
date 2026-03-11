@@ -127,3 +127,29 @@ class TestMemoryTrackerCleanup:
         for _ in range(5):
             t.update(b"\x00")
         assert t.packet_count == 5
+
+
+class TestMemoryTrackerStats:
+    def test_packets_per_second_is_zero_with_insufficient_samples(self):
+        t = MemoryTracker()
+        assert t.packets_per_second() == 0.0
+        t.update(b"\x00")
+        assert t.packets_per_second() == 0.0
+
+    def test_data_age_none_when_no_data(self):
+        t = MemoryTracker()
+        assert t.data_age_seconds() is None
+
+    def test_data_age_increases_after_update(self):
+        t = MemoryTracker()
+        t.update(b"\x00")
+        age = t.data_age_seconds()
+        assert age is not None
+        assert age >= 0
+
+    def test_known_senders_sorted_by_packet_count(self):
+        t = MemoryTracker()
+        t.update(b"\x00", sender="10.0.0.2")
+        t.update(b"\x00", sender="10.0.0.1")
+        t.update(b"\x00", sender="10.0.0.2")
+        assert t.known_senders() == ["10.0.0.2", "10.0.0.1"]
