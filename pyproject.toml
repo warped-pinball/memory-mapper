@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memory-mapper"
+version = "0.1.0"
+description = "CLI tool to receive UDP multicast memory snapshots and display them in the terminal"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+dependencies = [
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+memory-mapper = "memory_mapper.__main__:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-timeout>=2.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["memory_mapper*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 30
