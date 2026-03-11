@@ -16,13 +16,16 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact_name: memory-mapper-linux-amd64.deb
+            artifact_extension: deb
+            platform_slug: linux-amd64
             executable_name: memory-mapper
           - os: macos-latest
-            artifact_name: memory-mapper-macos
+            artifact_extension: ""
+            platform_slug: macos
             executable_name: memory-mapper-macos
           - os: windows-latest
-            artifact_name: memory-mapper-windows.exe
+            artifact_extension: exe
+            platform_slug: windows
             executable_name: memory-mapper-windows
 
     steps:
@@ -42,6 +45,19 @@ jobs:
       - name: Build standalone executable
         run: |
           pyinstaller --onefile --name "${{ matrix.executable_name }}" memory_mapper/__main__.py
+
+      - name: Set release filename
+        id: release_file
+        shell: bash
+        run: |
+          PACKAGE_VERSION="${GITHUB_REF_NAME#v}"
+          RELEASE_BASENAME="warped-pinball-dash-memory-mapper-${{ matrix.platform_slug }}-${PACKAGE_VERSION}"
+          if [ -n "${{ matrix.artifact_extension }}" ]; then
+            RELEASE_FILENAME="${RELEASE_BASENAME}.${{ matrix.artifact_extension }}"
+          else
+            RELEASE_FILENAME="${RELEASE_BASENAME}"
+          fi
+          echo "release_filename=${RELEASE_FILENAME}" >> "${GITHUB_OUTPUT}"
 
       - name: Build Linux .deb package
         if: runner.os == 'Linux'
@@ -63,9 +79,15 @@ jobs:
           cp dist/${{ matrix.executable_name }} pkg/usr/local/bin/memory-mapper
           chmod 0755 pkg/usr/local/bin/memory-mapper
 
-          dpkg-deb --build pkg dist/${{ matrix.artifact_name }}
+          dpkg-deb --build pkg "dist/${{ steps.release_file.outputs.release_filename }}"
+
+      - name: Rename non-Linux artifacts for release
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          mv "dist/${{ matrix.executable_name }}" "dist/${{ steps.release_file.outputs.release_filename }}"
 
       - name: Upload binary to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/${{ matrix.artifact_name }}
+          files: dist/${{ steps.release_file.outputs.release_filename }}

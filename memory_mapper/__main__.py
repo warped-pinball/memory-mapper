@@ -4,10 +4,16 @@ import argparse
 import sys
 import threading
 
-from . import __version__
-from .display import MemoryDisplay
-from .receiver import start_receiver
-from .tracker import MemoryTracker
+if __package__ in (None, ""):
+    from memory_mapper import __version__
+    from memory_mapper.display import MemoryDisplay
+    from memory_mapper.receiver import start_receiver
+    from memory_mapper.tracker import MemoryTracker
+else:
+    from . import __version__
+    from .display import MemoryDisplay
+    from .receiver import start_receiver
+    from .tracker import MemoryTracker
 
 DEFAULT_MULTICAST_GROUP = "239.255.0.0"
 DEFAULT_PORT = 2040
