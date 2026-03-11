@@ -35,6 +35,7 @@ class MemoryTracker:
         self.packet_count: int = 0
         self.last_update: Optional[float] = None
         self.packet_times: Deque[float] = deque(maxlen=256)
+        self.packet_sizes: Deque[int] = deque(maxlen=256)
         self.sender_packet_counts: Dict[str, int] = {}
         self.latest_sender: Optional[str] = None
 
@@ -62,6 +63,7 @@ class MemoryTracker:
         self.packet_count += 1
         self.last_update = now
         self.packet_times.append(now)
+        self.packet_sizes.append(len(data))
         if sender:
             self._record_sender(sender)
         return changed
@@ -98,6 +100,7 @@ class MemoryTracker:
         self.packet_count += 1
         self.last_update = now
         self.packet_times.append(now)
+        self.packet_sizes.append(len(chunk))
         if sender:
             self._record_sender(sender)
         return changed
@@ -208,6 +211,21 @@ class MemoryTracker:
             return 0.0
         return (len(self.packet_times) - 1) / elapsed
 
+    def refreshes_per_second(self) -> float:
+        """Estimate memory-map refresh rate in Hz from packet rate and packet size."""
+        if self.snapshot is None or len(self.snapshot) == 0 or not self.packet_sizes:
+            return 0.0
+
+        average_packet_size = sum(self.packet_sizes) / len(self.packet_sizes)
+        if average_packet_size <= 0:
+            return 0.0
+
+        packets_per_full_map = len(self.snapshot) / average_packet_size
+        if packets_per_full_map <= 0:
+            return 0.0
+
+        return self.packets_per_second() / packets_per_full_map
+
     def data_age_seconds(self) -> Optional[float]:
         """Return seconds since the latest packet, or None when no data exists."""
         if self.last_update is None:
@@ -236,3 +254,16 @@ class MemoryTracker:
             for k, v in self.change_times.items()
             if (now - v) < self.highlight_duration
         }
+
+    def reset_for_new_source(self) -> None:
+        """Reset active memory/scan state when switching to a different source."""
+        self.snapshot = None
+        self.change_times = {}
+        self.packet_count = 0
+        self.last_update = None
+        self.packet_times.clear()
+        self.packet_sizes.clear()
+        self.scan_baseline = None
+        self.scan_steps = []
+        self.scan_hits = {}
+        self.scan_total = {}

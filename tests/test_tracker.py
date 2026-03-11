@@ -161,6 +161,19 @@ class TestMemoryTrackerStats:
         t.update(b"\x00")
         assert t.packets_per_second() == 0.0
 
+    def test_refreshes_per_second_is_zero_when_no_data(self):
+        t = MemoryTracker()
+        assert t.refreshes_per_second() == 0.0
+
+    def test_refreshes_per_second_uses_snapshot_size_over_packet_size(self):
+        t = MemoryTracker()
+        t.packet_times.extend([1.0, 2.0, 3.0])
+        t.packet_sizes.extend([8, 8, 8])
+        t.snapshot = bytes(32)
+
+        assert t.packets_per_second() == 1.0
+        assert t.refreshes_per_second() == 0.25
+
     def test_data_age_none_when_no_data(self):
         t = MemoryTracker()
         assert t.data_age_seconds() is None
@@ -187,6 +200,23 @@ class TestMemoryTrackerStats:
         assert t.known_senders() == ["10.0.0.3"]
         assert t.snapshot is None
         assert t.packet_count == 0
+
+
+class TestMemoryTrackerSourceReset:
+    def test_reset_for_new_source_clears_active_state_only(self):
+        t = MemoryTracker()
+        t.update(b"\x00", sender="10.0.0.1")
+        t.update_chunk(4, b"\xFF", sender="10.0.0.1")
+        t.apply_scan("c")
+        t.update(b"\x01", sender="10.0.0.1")
+        t.apply_scan("i")
+
+        t.reset_for_new_source()
+
+        assert t.snapshot is None
+        assert t.packet_count == 0
+        assert t.scan_stats().steps == 0
+        assert t.known_senders() == ["10.0.0.1"]
 
 
 class TestMemoryTrackerScanWorkflow:

@@ -77,6 +77,8 @@ class TestRenderSnapshotWithData:
         assert "Sources" in output
         assert "10.0.0.1" in output
         assert "Rate" in output
+        assert "Refresh" in output
+        assert "Hz" in output
         assert "Age" in output
 
 
@@ -155,6 +157,21 @@ class TestSourceSelection:
         assert "1:10.0.0.1" in output
         assert "2:10.0.0.2" in output
 
+
+    def test_switching_source_resets_tracker_state(self):
+        t = MemoryTracker()
+        t.update(b"\x00", sender="10.0.0.1")
+        t.update(b"\x00", sender="10.0.0.2")
+        t.update_chunk(5, b"\xFF", sender="10.0.0.1")
+
+        display = MemoryDisplay(t, selected_source="10.0.0.1")
+
+        display._handle_input("2", stop_event=None)
+
+        assert display.selected_source == "10.0.0.2"
+        assert t.snapshot is None
+        assert t.packet_count == 0
+        assert "Reset state for new source" in display.status_message
     def test_number_key_selects_source(self):
         t = MemoryTracker()
         t.update(b"\x00", sender="10.0.0.1")

@@ -91,7 +91,8 @@ def main(argv=None) -> int:
         tracker.record_sender_only(sender)
         if display.selected_source is None:
             display.selected_source = sender
-            display.status_message = f"Auto-selected source 1: {sender}"
+            tracker.reset_for_new_source()
+            display.status_message = f"Auto-selected source 1: {sender} (fresh state)"
         if sender != display.selected_source:
             return
 
