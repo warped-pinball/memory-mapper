@@ -94,7 +94,12 @@ def main(argv=None) -> int:
             display.status_message = f"Auto-selected source 1: {sender}"
         if sender != display.selected_source:
             return
-        tracker.update(data, sender=sender)
+
+        if len(data) >= 4:
+            offset = int.from_bytes(data[:4], "big")
+            tracker.update_chunk(offset, data[4:], sender=sender)
+        else:
+            tracker.update(data, sender=sender)
 
     stop_event = threading.Event()
 

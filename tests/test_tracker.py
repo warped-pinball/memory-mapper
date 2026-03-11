@@ -81,6 +81,31 @@ class TestMemoryTrackerChangeDetection:
         assert {2, 3}.issubset(changed)
 
 
+class TestMemoryTrackerChunkUpdates:
+    def test_first_chunk_with_offset_extends_snapshot(self):
+        t = MemoryTracker()
+
+        changed = t.update_chunk(4, b"\xAA\xBB")
+
+        assert changed == {4, 5}
+        assert t.snapshot == b"\x00\x00\x00\x00\xAA\xBB"
+
+    def test_chunk_update_marks_only_changed_indices(self):
+        t = MemoryTracker()
+        t.update(b"\x00\x01\x02\x03")
+
+        changed = t.update_chunk(1, b"\x01\xFF")
+
+        assert changed == {2}
+        assert t.snapshot == b"\x00\x01\xFF\x03"
+
+    def test_negative_offset_raises_value_error(self):
+        t = MemoryTracker()
+
+        with pytest.raises(ValueError):
+            t.update_chunk(-1, b"\x00")
+
+
 class TestMemoryTrackerRecentlyChanged:
     def test_recently_changed_true_after_update(self):
         t = MemoryTracker(highlight_duration=5.0)

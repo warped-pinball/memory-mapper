@@ -66,6 +66,42 @@ class MemoryTracker:
             self._record_sender(sender)
         return changed
 
+    def update_chunk(
+        self,
+        offset: int,
+        chunk: bytes,
+        sender: Optional[str] = None,
+    ) -> Set[int]:
+        """Apply a chunk update at *offset* and return changed byte indices."""
+        if offset < 0:
+            raise ValueError("offset must be >= 0")
+
+        now = time.monotonic()
+        changed: Set[int] = set()
+
+        if self.snapshot is None:
+            snapshot_data = bytearray(offset + len(chunk))
+        else:
+            snapshot_data = bytearray(self.snapshot)
+            needed = offset + len(chunk)
+            if needed > len(snapshot_data):
+                snapshot_data.extend(b"\x00" * (needed - len(snapshot_data)))
+
+        for index, value in enumerate(chunk):
+            absolute_index = offset + index
+            if snapshot_data[absolute_index] != value:
+                changed.add(absolute_index)
+                self.change_times[absolute_index] = now
+            snapshot_data[absolute_index] = value
+
+        self.snapshot = bytes(snapshot_data)
+        self.packet_count += 1
+        self.last_update = now
+        self.packet_times.append(now)
+        if sender:
+            self._record_sender(sender)
+        return changed
+
     def record_sender_only(self, sender: str) -> None:
         """Record sender activity without mutating the active snapshot."""
         self._record_sender(sender)
