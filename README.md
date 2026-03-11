@@ -97,7 +97,8 @@ Each push to `main` and every version tag (`v*`) triggers the [Build & Release](
 
 | Platform | Artifact |
 |----------|----------|
-| Linux (Ubuntu) | `warped-pinball-memory-mapper-linux-amd64-<version>.deb` |
+| Linux (Ubuntu x86_64) | `warped-pinball-memory-mapper-linux-amd64-<version>.deb` |
+| Raspberry Pi (Ubuntu ARM64) | `warped-pinball-memory-mapper-linux-arm64-raspberry-pi-<version>.deb` |
 | macOS    | `warped-pinball-memory-mapper-macos-<version>` |
 | Windows  | `warped-pinball-memory-mapper-windows-<version>.exe` |
 
