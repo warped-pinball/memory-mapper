@@ -2,7 +2,7 @@
 
 from rich.console import Group
 
-from memory_mapper.display import _auto_bytes_per_row, render_snapshot
+from memory_mapper.display import MemoryDisplay, _auto_bytes_per_row, render_snapshot
 from memory_mapper.tracker import MemoryTracker
 
 
@@ -71,7 +71,7 @@ class TestRenderSnapshotWithData:
 
         buf = StringIO()
         console = Console(file=buf, width=120)
-        console.print(render_snapshot(t, active_filter="10.0.0.1"))
+        console.print(render_snapshot(t, selected_source="10.0.0.1"))
         output = buf.getvalue()
         assert "Menu" in output
         assert "Sources" in output
@@ -122,3 +122,33 @@ class TestRenderSnapshotWithData:
         assert legend_index != -1
         assert menu_index != -1
         assert memory_index < legend_index < menu_index
+
+
+class TestSourceSelection:
+    def test_menu_does_not_show_all_source_option(self):
+        t = MemoryTracker()
+        t.update(b"\x00", sender="10.0.0.1")
+        t.update(b"\x00", sender="10.0.0.2")
+
+        from rich.console import Console
+        from io import StringIO
+
+        buf = StringIO()
+        console = Console(file=buf, width=140)
+        console.print(render_snapshot(t, selected_source="10.0.0.1"))
+        output = buf.getvalue()
+
+        assert "all" not in output.lower()
+        assert "1:10.0.0.1" in output
+        assert "2:10.0.0.2" in output
+
+    def test_number_key_selects_source(self):
+        t = MemoryTracker()
+        t.update(b"\x00", sender="10.0.0.1")
+        t.update(b"\x00", sender="10.0.0.2")
+        display = MemoryDisplay(t, selected_source="10.0.0.1")
+
+        display._handle_input("2", stop_event=None)
+
+        assert display.selected_source == "10.0.0.2"
+        assert "Selected source 2" in display.status_message
