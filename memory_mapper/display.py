@@ -39,7 +39,7 @@ def _auto_bytes_per_row(terminal_width: Optional[int], preferred: int) -> int:
     return max(4, max(preferred, aligned))
 
 
-def _render_menu(tracker: MemoryTracker, active_filter: Optional[str], status_message: str) -> Panel:
+def _render_menu(tracker: MemoryTracker, selected_source: Optional[str], status_message: str) -> Panel:
     senders = tracker.known_senders()
     stats = tracker.scan_stats()
 
@@ -47,23 +47,25 @@ def _render_menu(tracker: MemoryTracker, active_filter: Optional[str], status_me
     menu.add_column(ratio=5)
     menu.add_column(ratio=3)
 
-    sender_bits = ["[bold]Sources:[/bold]", "all"]
-    for idx, sender in enumerate(senders[:8], start=1):
-        sender_bits.append(f"{idx}:{sender}")
+    sender_bits = ["[bold]Sources:[/bold]"]
+    for idx, sender in enumerate(senders[:9], start=1):
+        marker = "*" if sender == selected_source else ""
+        sender_bits.append(f"{idx}:{sender}{marker}")
 
-    filter_label = active_filter or "all"
+    filter_label = selected_source or "(waiting for first source)"
     pps = tracker.packets_per_second()
     age = tracker.data_age_seconds()
     age_text = "—" if age is None else f"{age:.1f}s"
 
     commands = (
+        "[bold]Source:[/bold] [cyan]1-9[/cyan] select  "
         "[bold]Scan:[/bold] [cyan]C[/cyan] changed  [cyan]N[/cyan] unchanged  "
         "[cyan]I[/cyan] increased  [cyan]D[/cyan] decreased  "
         "[cyan]R[/cyan] reset scan  [cyan]Q[/cyan] quit"
     )
 
     metrics = (
-        f"[bold]Filter:[/bold] {filter_label}  [bold]Rate:[/bold] {pps:.1f} pkt/s  [bold]Age:[/bold] {age_text}\n"
+        f"[bold]Selected:[/bold] {filter_label}  [bold]Rate:[/bold] {pps:.1f} pkt/s  [bold]Age:[/bold] {age_text}\n"
         f"[bold]Steps:[/bold] {stats.steps}  [bold]Hard:[/bold] {stats.hard_match_count}  "
         f"[bold]Soft(1 miss):[/bold] {stats.soft_match_count_1}  [bold]Soft(2 misses):[/bold] {stats.soft_match_count_2}"
     )
@@ -100,11 +102,11 @@ def render_snapshot(
     tracker: MemoryTracker,
     bytes_per_row: int = BYTES_PER_ROW,
     terminal_width: Optional[int] = None,
-    active_filter: Optional[str] = None,
+    selected_source: Optional[str] = None,
     status_message: str = "Ready",
 ):
     snapshot = tracker.snapshot
-    menu_panel = _render_menu(tracker, active_filter, status_message)
+    menu_panel = _render_menu(tracker, selected_source, status_message)
 
     if snapshot is None:
         body = Text("Waiting for data…", style=DIM_STYLE, justify="center")
@@ -156,12 +158,12 @@ class MemoryDisplay:
         tracker: MemoryTracker,
         bytes_per_row: int = BYTES_PER_ROW,
         refresh_per_second: float = 4.0,
-        active_filter: Optional[str] = None,
+        selected_source: Optional[str] = None,
     ) -> None:
         self.tracker = tracker
         self.bytes_per_row = bytes_per_row
         self.refresh_per_second = refresh_per_second
-        self.active_filter = active_filter
+        self.selected_source = selected_source
         self._console = Console()
         self.status_message = "Waiting for first snapshot"
 
@@ -186,12 +188,25 @@ class MemoryDisplay:
             self.tracker.reset_scan()
             self.status_message = "Scan reset. Baseline captured from current snapshot."
             return
+        if k.isdigit() and k != "0":
+            self._select_source(int(k))
+            return
         if k in SCAN_MODES:
             applied = self.tracker.apply_scan(k)
             if applied:
                 self.status_message = f"Applied scan filter: {SCAN_MODES[k]}"
             else:
                 self.status_message = "Captured baseline; press scan option again after values change."
+
+
+    def _select_source(self, source_number: int) -> None:
+        senders = self.tracker.known_senders()
+        index = source_number - 1
+        if 0 <= index < len(senders):
+            self.selected_source = senders[index]
+            self.status_message = f"Selected source {source_number}: {self.selected_source}"
+        else:
+            self.status_message = f"Source {source_number} is unavailable"
 
     def run(self, stop_event=None) -> None:
         can_raw_mode = sys.stdin.isatty() and termios is not None and tty is not None
@@ -206,7 +221,7 @@ class MemoryDisplay:
                     self.tracker,
                     self.bytes_per_row,
                     terminal_width=self._console.size.width,
-                    active_filter=self.active_filter,
+                    selected_source=self.selected_source,
                     status_message=self.status_message,
                 ),
                 console=self._console,
@@ -225,7 +240,7 @@ class MemoryDisplay:
                                 self.tracker,
                                 self.bytes_per_row,
                                 terminal_width=self._console.size.width,
-                                active_filter=self.active_filter,
+                                selected_source=self.selected_source,
                                 status_message=self.status_message,
                             )
                         )

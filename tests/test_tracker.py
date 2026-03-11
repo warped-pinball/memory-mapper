@@ -154,6 +154,15 @@ class TestMemoryTrackerStats:
         t.update(b"\x00", sender="10.0.0.2")
         assert t.known_senders() == ["10.0.0.2", "10.0.0.1"]
 
+    def test_record_sender_only_updates_source_stats(self):
+        t = MemoryTracker()
+
+        t.record_sender_only("10.0.0.3")
+
+        assert t.known_senders() == ["10.0.0.3"]
+        assert t.snapshot is None
+        assert t.packet_count == 0
+
 
 class TestMemoryTrackerScanWorkflow:
     def test_first_scan_captures_baseline_only(self):

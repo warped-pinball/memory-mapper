@@ -66,7 +66,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--source-filter",
         default=None,
-        help="Only process packets from this sender IP (default: all senders)",
+        help=(
+            "Only process packets from this sender IP. By default, the first detected "
+            "sender is selected."
+        ),
     )
     return parser
 
@@ -85,19 +88,23 @@ def main(argv=None) -> int:
     tracker = MemoryTracker(highlight_duration=args.highlight_duration)
 
     def on_packet(data: bytes, sender: str) -> None:
-        if args.source_filter and sender != args.source_filter:
+        tracker.record_sender_only(sender)
+        if display.selected_source is None:
+            display.selected_source = sender
+            display.status_message = f"Auto-selected source 1: {sender}"
+        if sender != display.selected_source:
             return
         tracker.update(data, sender=sender)
 
     stop_event = threading.Event()
 
-    receiver_thread = start_receiver(args.group, args.port, on_packet, stop_event)
-
     display = MemoryDisplay(
         tracker,
         bytes_per_row=args.bytes_per_row,
-        active_filter=args.source_filter,
+        selected_source=args.source_filter,
     )
+
+    receiver_thread = start_receiver(args.group, args.port, on_packet, stop_event)
 
     try:
         display.run(stop_event=stop_event)

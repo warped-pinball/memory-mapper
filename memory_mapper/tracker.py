@@ -62,9 +62,16 @@ class MemoryTracker:
         self.last_update = now
         self.packet_times.append(now)
         if sender:
-            self.latest_sender = sender
-            self.sender_packet_counts[sender] = self.sender_packet_counts.get(sender, 0) + 1
+            self._record_sender(sender)
         return changed
+
+    def record_sender_only(self, sender: str) -> None:
+        """Record sender activity without mutating the active snapshot."""
+        self._record_sender(sender)
+
+    def _record_sender(self, sender: str) -> None:
+        self.latest_sender = sender
+        self.sender_packet_counts[sender] = self.sender_packet_counts.get(sender, 0) + 1
 
     def apply_scan(self, mode_key: str) -> bool:
         """Apply an iterative scan comparison against the previous captured snapshot."""
