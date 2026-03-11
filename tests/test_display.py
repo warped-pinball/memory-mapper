@@ -1,6 +1,6 @@
 """Tests for memory_mapper.display (rendering logic)."""
 
-from rich.panel import Panel
+from rich.console import Group
 
 from memory_mapper.display import _auto_bytes_per_row, render_snapshot
 from memory_mapper.tracker import MemoryTracker
@@ -10,7 +10,7 @@ class TestRenderSnapshotNoData:
     def test_returns_panel(self):
         t = MemoryTracker()
         result = render_snapshot(t)
-        assert isinstance(result, Panel)
+        assert isinstance(result, Group)
 
     def test_waiting_message_when_empty(self):
         t = MemoryTracker()
@@ -30,7 +30,7 @@ class TestRenderSnapshotWithData:
         t = MemoryTracker()
         t.update(b"\x00\x01\x02\x03")
         panel = render_snapshot(t)
-        assert isinstance(panel, Panel)
+        assert isinstance(panel, Group)
 
     def test_offset_shown(self):
         t = MemoryTracker()
