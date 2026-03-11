@@ -58,7 +58,7 @@ def _render_menu(tracker: MemoryTracker, active_filter: Optional[str], status_me
 
     commands = (
         "[bold]Scan:[/bold] [cyan]C[/cyan] changed  [cyan]N[/cyan] unchanged  "
-        "[cyan]I[/cyan] increased  [cyan]D[/cyan] decreased  "
+        "[cyan]I[/cyan] increased  [cyan]D[/cyan] decreased  [cyan]A[/cyan] any/not sure  "
         "[cyan]R[/cyan] reset scan  [cyan]Q[/cyan] quit"
     )
 
@@ -190,6 +190,8 @@ class MemoryDisplay:
             applied = self.tracker.apply_scan(k)
             if applied:
                 self.status_message = f"Applied scan filter: {SCAN_MODES[k]}"
+            elif k == "a":
+                self.status_message = "Captured a fresh baseline (any/not sure)."
             else:
                 self.status_message = "Captured baseline; press scan option again after values change."
 

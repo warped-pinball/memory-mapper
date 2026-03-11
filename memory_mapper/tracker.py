@@ -10,6 +10,7 @@ SCAN_MODES = {
     "n": "unchanged",
     "i": "increased",
     "d": "decreased",
+    "a": "any / not sure",
 }
 
 
@@ -69,6 +70,10 @@ class MemoryTracker:
     def apply_scan(self, mode_key: str) -> bool:
         """Apply an iterative scan comparison against the previous captured snapshot."""
         if self.snapshot is None or mode_key not in SCAN_MODES:
+            return False
+
+        if mode_key == "a":
+            self.scan_baseline = bytes(self.snapshot)
             return False
 
         if self.scan_baseline is None:
