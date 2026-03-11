@@ -188,6 +188,20 @@ class TestMemoryTrackerScanWorkflow:
         assert t.scan_match_level(0) == 3
         assert t.scan_match_level(2) == 1
 
+
+    def test_any_scan_mode_refreshes_baseline_without_step(self):
+        t = MemoryTracker()
+        t.update(b"\x01")
+        assert not t.apply_scan("c")
+
+        t.update(b"\x02")
+        assert not t.apply_scan("a")
+        assert t.scan_stats().steps == 0
+
+        t.update(b"\x03")
+        assert t.apply_scan("i")
+        assert t.scan_stats().steps == 1
+
     def test_reset_scan_clears_state(self):
         t = MemoryTracker()
         t.update(b"\x01")

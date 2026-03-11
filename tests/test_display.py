@@ -79,6 +79,19 @@ class TestRenderSnapshotWithData:
         assert "Rate" in output
         assert "Age" in output
 
+
+    def test_menu_shows_any_scan_option(self):
+        t = MemoryTracker()
+        t.update(b"\x00")
+        from rich.console import Console
+        from io import StringIO
+
+        buf = StringIO()
+        console = Console(file=buf, width=120)
+        console.print(render_snapshot(t))
+        output = buf.getvalue()
+        assert "A any/not sure" in output
+
     def test_changed_bytes_render_without_error(self):
         t = MemoryTracker(highlight_duration=5.0)
         t.update(b"\x00" * 16)
