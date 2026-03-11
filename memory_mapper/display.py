@@ -10,6 +10,11 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX fallback
     termios = None
     tty = None
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - non-Windows fallback
+    msvcrt = None
 from typing import Optional
 
 from rich.console import Console, Group
@@ -173,7 +178,14 @@ class MemoryDisplay:
     def _capture_keypress(self) -> Optional[str]:
         if not sys.stdin.isatty():
             return None
-        readable, _, _ = select.select([sys.stdin], [], [], 0)
+        if msvcrt is not None:
+            if not msvcrt.kbhit():
+                return None
+            return msvcrt.getwch()
+        try:
+            readable, _, _ = select.select([sys.stdin], [], [], 0)
+        except (OSError, ValueError):
+            return None
         if not readable:
             return None
         return sys.stdin.read(1)

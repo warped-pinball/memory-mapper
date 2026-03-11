@@ -182,3 +182,21 @@ class TestSourceSelection:
 
         assert display.selected_source == "10.0.0.2"
         assert "Selected source 2" in display.status_message
+
+
+class TestCaptureKeypress:
+    def test_capture_keypress_handles_select_oserror(self, monkeypatch):
+        t = MemoryTracker()
+        display = MemoryDisplay(t)
+
+        class FakeStdin:
+            def isatty(self):
+                return True
+
+        monkeypatch.setattr("memory_mapper.display.sys.stdin", FakeStdin())
+        monkeypatch.setattr(
+            "memory_mapper.display.select.select",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("not a socket")),
+        )
+
+        assert display._capture_keypress() is None
