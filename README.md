@@ -79,11 +79,13 @@ Each push to `main` and every version tag (`v*`) triggers the [Build & Release](
 
 | Platform | Artifact |
 |----------|----------|
-| Linux    | `memory-mapper-linux` |
+| Linux (Ubuntu) | `memory-mapper-linux-amd64.deb` |
 | macOS    | `memory-mapper-macos` |
 | Windows  | `memory-mapper-windows.exe` |
 
-Download the appropriate binary from the **Actions** tab or from the **Releases** page.
+On Ubuntu, download the `.deb` package and open it to install (or run `sudo apt install ./memory-mapper-linux-amd64.deb`). This installs a `memory-mapper` command in `/usr/local/bin` without requiring Python to be preinstalled.
+
+Download the appropriate artifact from the **Actions** tab or from the **Releases** page.
 
 ---
 
