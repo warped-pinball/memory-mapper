@@ -49,23 +49,26 @@ def _render_menu(tracker: MemoryTracker, selected_source: Optional[str], status_
 
     sender_bits = ["[bold]Sources:[/bold]"]
     for idx, sender in enumerate(senders[:9], start=1):
-        marker = "*" if sender == selected_source else ""
-        sender_bits.append(f"{idx}:{sender}{marker}")
+        if sender == selected_source:
+            sender_bits.append(f"[bold bright_blue]{idx}[/bold bright_blue]:{sender}*")
+        else:
+            sender_bits.append(f"[bright_blue]{idx}[/bright_blue]:{sender}")
 
     filter_label = selected_source or "(waiting for first source)"
     pps = tracker.packets_per_second()
+    hertz = tracker.refreshes_per_second()
     age = tracker.data_age_seconds()
     age_text = "—" if age is None else f"{age:.1f}s"
 
     commands = (
-        "[bold]Source:[/bold] [cyan]1-9[/cyan] select  "
         "[bold]Scan:[/bold] [cyan]C[/cyan] changed  [cyan]N[/cyan] unchanged  "
         "[cyan]I[/cyan] increased  [cyan]D[/cyan] decreased  [cyan]A[/cyan] any/not sure  "
         "[cyan]R[/cyan] reset scan  [cyan]Q[/cyan] quit"
     )
 
     metrics = (
-        f"[bold]Selected:[/bold] {filter_label}  [bold]Rate:[/bold] {pps:.1f} pkt/s  [bold]Age:[/bold] {age_text}\n"
+        f"[bold]Selected:[/bold] {filter_label}  [bold]Rate:[/bold] {pps:.1f} pkt/s  "
+        f"[bold]Refresh:[/bold] {hertz:.2f} Hz  [bold]Age:[/bold] {age_text}\n"
         f"[bold]Steps:[/bold] {stats.steps}  [bold]Hard:[/bold] {stats.hard_match_count}  "
         f"[bold]Soft(1 miss):[/bold] {stats.soft_match_count_1}  [bold]Soft(2 misses):[/bold] {stats.soft_match_count_2}"
     )
@@ -205,8 +208,13 @@ class MemoryDisplay:
         senders = self.tracker.known_senders()
         index = source_number - 1
         if 0 <= index < len(senders):
-            self.selected_source = senders[index]
-            self.status_message = f"Selected source {source_number}: {self.selected_source}"
+            new_source = senders[index]
+            if new_source != self.selected_source:
+                self.selected_source = new_source
+                self.tracker.reset_for_new_source()
+                self.status_message = f"Selected source {source_number}: {self.selected_source}. Reset state for new source."
+            else:
+                self.status_message = f"Selected source {source_number}: {self.selected_source}"
         else:
             self.status_message = f"Source {source_number} is unavailable"
 
