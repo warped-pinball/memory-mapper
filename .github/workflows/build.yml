@@ -16,8 +16,8 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact_name: memory-mapper-linux
-            executable_name: memory-mapper-linux
+            artifact_name: memory-mapper-linux-amd64.deb
+            executable_name: memory-mapper
           - os: macos-latest
             artifact_name: memory-mapper-macos
             executable_name: memory-mapper-macos
@@ -42,6 +42,28 @@ jobs:
       - name: Build standalone executable
         run: |
           pyinstaller --onefile --name "${{ matrix.executable_name }}" memory_mapper/__main__.py
+
+      - name: Build Linux .deb package
+        if: runner.os == 'Linux'
+        run: |
+          PACKAGE_VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p pkg/DEBIAN pkg/usr/local/bin
+
+          cat > pkg/DEBIAN/control <<EOF
+Package: memory-mapper
+Version: ${PACKAGE_VERSION}
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Memory Mapper Maintainers
+Description: UDP multicast memory snapshot viewer
+ Standalone CLI tool that displays byte-level memory updates in the terminal.
+EOF
+
+          cp dist/${{ matrix.executable_name }} pkg/usr/local/bin/memory-mapper
+          chmod 0755 pkg/usr/local/bin/memory-mapper
+
+          dpkg-deb --build pkg dist/${{ matrix.artifact_name }}
 
       - name: Upload binary to release
         uses: softprops/action-gh-release@v2
