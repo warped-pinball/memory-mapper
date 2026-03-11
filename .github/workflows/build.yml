@@ -49,16 +49,16 @@ jobs:
           PACKAGE_VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p pkg/DEBIAN pkg/usr/local/bin
 
-          cat > pkg/DEBIAN/control <<EOF
-Package: memory-mapper
-Version: ${PACKAGE_VERSION}
-Section: utils
-Priority: optional
-Architecture: amd64
-Maintainer: Memory Mapper Maintainers
-Description: UDP multicast memory snapshot viewer
- Standalone CLI tool that displays byte-level memory updates in the terminal.
-EOF
+          {
+            echo "Package: memory-mapper"
+            echo "Version: ${PACKAGE_VERSION}"
+            echo "Section: utils"
+            echo "Priority: optional"
+            echo "Architecture: amd64"
+            echo "Maintainer: Memory Mapper Maintainers"
+            echo "Description: UDP multicast memory snapshot viewer"
+            echo " Standalone CLI tool that displays byte-level memory updates in the terminal."
+          } > pkg/DEBIAN/control
 
           cp dist/${{ matrix.executable_name }} pkg/usr/local/bin/memory-mapper
           chmod 0755 pkg/usr/local/bin/memory-mapper
