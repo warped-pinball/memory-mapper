@@ -1,0 +1,8 @@
+memory_mapper.egg-info/
+__pycache__/
+*.py[cod]
+*.pyo
+dist/
+build/
+*.egg-info/
+.pytest_cache/
