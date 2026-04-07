@@ -40,6 +40,9 @@ MARKED_STYLE = Style(bgcolor="bright_red", color="white", bold=True)
 
 BYTES_PER_ROW = 16
 
+ASCII_PRINTABLE_START = 32
+ASCII_PRINTABLE_END = 127
+
 
 def _auto_bytes_per_row(terminal_width: Optional[int], preferred: int) -> int:
     if terminal_width is None:
@@ -149,7 +152,7 @@ def _render_cursor_info(
             f"[bold]Hex:[/bold] 0x{value:02X}  "
             f"[bold]Dec:[/bold] {value}  "
             f"[bold]Bin:[/bold] {value:08b}  "
-            f"[bold]ASCII:[/bold] {chr(value) if 32 <= value < 127 else '·'}"
+            f"[bold]ASCII:[/bold] {chr(value) if ASCII_PRINTABLE_START <= value < ASCII_PRINTABLE_END else '·'}"
         )
         history = tracker.get_value_history(cursor_pos)
         if history:
@@ -220,7 +223,7 @@ def render_snapshot(
         if ascii_mode:
             line.append("  ")
             for col, byte_val in enumerate(row_bytes):
-                ch = chr(byte_val) if 32 <= byte_val < 127 else "·"
+                ch = chr(byte_val) if ASCII_PRINTABLE_START <= byte_val < ASCII_PRINTABLE_END else "·"
                 style = _byte_style(tracker, row_start + col, cursor_pos)
                 line.append(ch, style=style)
         memory_text.append(line)
@@ -389,7 +392,7 @@ class MemoryDisplay:
                 entry["value_bin"] = None
             export_data.append(entry)
 
-        filename = f"marked_addresses_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filename = f"marked_addresses_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
         filepath = os.path.join(os.getcwd(), filename)
         with open(filepath, "w") as f:
             json.dump(export_data, f, indent=2)
