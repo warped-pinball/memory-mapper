@@ -29,6 +29,10 @@ from rich.text import Text
 
 from .tracker import MemoryTracker, SCAN_MODES
 
+HIGHLIGHT_DURATION_MIN = 0.5
+HIGHLIGHT_DURATION_MAX = 30.0
+HIGHLIGHT_DURATION_STEP = 0.5
+
 CHANGED_STYLE = Style(bgcolor="yellow", color="black", bold=True)
 HARD_MATCH_STYLE = Style(bgcolor="green", color="black", bold=True)
 SOFT_MATCH_1_STYLE = Style(bgcolor="bright_cyan", color="black", bold=True)
@@ -87,7 +91,7 @@ def _render_menu(
         "[bold]Nav:[/bold] [cyan]←↑↓→[/cyan] move cursor  [cyan]Space[/cyan] mark  "
         "[cyan]E[/cyan] export  [cyan]T[/cyan] ASCII "
         + ("[bright_green]ON[/bright_green]" if ascii_mode else "off")
-        + "  [cyan]Q[/cyan] quit"
+        + "  [cyan]+/-[/cyan] highlight time  [cyan]Q[/cyan] quit"
     )
 
     metrics = (
@@ -332,6 +336,22 @@ class MemoryDisplay:
         if k == "t":
             self.ascii_mode = not self.ascii_mode
             self.status_message = f"ASCII view {'enabled' if self.ascii_mode else 'disabled'}"
+            return
+        if k in ("+", "="):
+            new_val = min(
+                HIGHLIGHT_DURATION_MAX,
+                self.tracker.highlight_duration + HIGHLIGHT_DURATION_STEP,
+            )
+            self.tracker.highlight_duration = new_val
+            self.status_message = f"Highlight duration: {new_val:.1f}s"
+            return
+        if k in ("-", "_"):
+            new_val = max(
+                HIGHLIGHT_DURATION_MIN,
+                self.tracker.highlight_duration - HIGHLIGHT_DURATION_STEP,
+            )
+            self.tracker.highlight_duration = new_val
+            self.status_message = f"Highlight duration: {new_val:.1f}s"
             return
         if k == "r":
             self.tracker.reset_scan()

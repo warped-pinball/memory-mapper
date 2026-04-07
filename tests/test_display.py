@@ -346,6 +346,56 @@ class TestAsciiMode:
         assert "·" in output
 
 
+class TestHighlightDurationAdjustment:
+    def test_plus_increases_duration(self):
+        t = MemoryTracker(highlight_duration=3.0)
+        display = MemoryDisplay(t)
+        display._handle_input("+", stop_event=None)
+        assert t.highlight_duration == 3.5
+        assert "3.5s" in display.status_message
+
+    def test_equals_increases_duration(self):
+        t = MemoryTracker(highlight_duration=3.0)
+        display = MemoryDisplay(t)
+        display._handle_input("=", stop_event=None)
+        assert t.highlight_duration == 3.5
+
+    def test_minus_decreases_duration(self):
+        t = MemoryTracker(highlight_duration=3.0)
+        display = MemoryDisplay(t)
+        display._handle_input("-", stop_event=None)
+        assert t.highlight_duration == 2.5
+        assert "2.5s" in display.status_message
+
+    def test_underscore_decreases_duration(self):
+        t = MemoryTracker(highlight_duration=3.0)
+        display = MemoryDisplay(t)
+        display._handle_input("_", stop_event=None)
+        assert t.highlight_duration == 2.5
+
+    def test_does_not_go_below_minimum(self):
+        t = MemoryTracker(highlight_duration=0.5)
+        display = MemoryDisplay(t)
+        display._handle_input("-", stop_event=None)
+        assert t.highlight_duration == 0.5
+        assert "0.5s" in display.status_message
+
+    def test_does_not_go_above_maximum(self):
+        t = MemoryTracker(highlight_duration=30.0)
+        display = MemoryDisplay(t)
+        display._handle_input("+", stop_event=None)
+        assert t.highlight_duration == 30.0
+        assert "30.0s" in display.status_message
+
+    def test_multiple_adjustments(self):
+        t = MemoryTracker(highlight_duration=3.0)
+        display = MemoryDisplay(t)
+        display._handle_input("+", stop_event=None)
+        display._handle_input("+", stop_event=None)
+        display._handle_input("+", stop_event=None)
+        assert t.highlight_duration == 4.5
+
+
 class TestCursorInfoPanel:
     def test_cursor_panel_shows_address_info(self):
         t = MemoryTracker()

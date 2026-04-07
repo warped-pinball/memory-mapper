@@ -52,6 +52,7 @@ Use single-key commands to iteratively filter memory offsets based on how each b
 - `I` = increased
 - `D` = decreased
 - `R` = reset scan state
+- `+` / `-` = increase / decrease highlight duration (0.5 s steps, range 0.5–30 s)
 - `Q` = quit
 
 Matches are color-coded with a legend:
