@@ -2,8 +2,8 @@
 
 import time
 from collections import deque
-from dataclasses import dataclass
-from typing import Deque, Dict, Optional, Set
+from dataclasses import dataclass, field
+from typing import Deque, Dict, List, Optional, Set, Tuple
 
 SCAN_MODES = {
     "c": "changed",
@@ -28,6 +28,8 @@ class ScanStats:
 class MemoryTracker:
     """Tracks memory snapshots over time and records which bytes have changed."""
 
+    MAX_VALUE_HISTORY = 10
+
     def __init__(self, highlight_duration: float = 3.0) -> None:
         self.highlight_duration = highlight_duration
         self.snapshot: Optional[bytes] = None
@@ -44,6 +46,39 @@ class MemoryTracker:
         self.scan_hits: Dict[int, int] = {}
         self.scan_total: Dict[int, int] = {}
 
+        self.marked_addresses: Set[int] = set()
+        self.value_history: Dict[int, Deque[Tuple[float, int]]] = {}
+
+    def _record_value_change(self, index: int, new_value: int, timestamp: float) -> None:
+        """Record a value change in the history for the given address."""
+        if index not in self.value_history:
+            self.value_history[index] = deque(maxlen=self.MAX_VALUE_HISTORY)
+        self.value_history[index].append((timestamp, new_value))
+
+    def toggle_mark(self, address: int) -> bool:
+        """Toggle the marked state of an address. Returns True if now marked."""
+        if address in self.marked_addresses:
+            self.marked_addresses.discard(address)
+            return False
+        self.marked_addresses.add(address)
+        return True
+
+    def get_value_history(self, index: int) -> List[Tuple[float, int]]:
+        """Return the last N value-change entries for the given address."""
+        if index not in self.value_history:
+            return []
+        return list(self.value_history[index])
+
+    def export_marked(self) -> List[Tuple[int, Optional[int]]]:
+        """Return sorted list of (address, current_value) for all marked addresses."""
+        result: List[Tuple[int, Optional[int]]] = []
+        for addr in sorted(self.marked_addresses):
+            if self.snapshot is not None and addr < len(self.snapshot):
+                result.append((addr, self.snapshot[addr]))
+            else:
+                result.append((addr, None))
+        return result
+
     def update(self, data: bytes, sender: Optional[str] = None) -> Set[int]:
         """Update the stored snapshot and return the set of changed byte indices."""
         now = time.monotonic()
@@ -55,9 +90,11 @@ class MemoryTracker:
                 if self.snapshot[i] != data[i]:
                     changed.add(i)
                     self.change_times[i] = now
+                    self._record_value_change(i, data[i], now)
             for i in range(min_len, len(data)):
                 changed.add(i)
                 self.change_times[i] = now
+                self._record_value_change(i, data[i], now)
 
         self.snapshot = bytes(data)
         self.packet_count += 1
@@ -94,6 +131,7 @@ class MemoryTracker:
             if snapshot_data[absolute_index] != value:
                 changed.add(absolute_index)
                 self.change_times[absolute_index] = now
+                self._record_value_change(absolute_index, value, now)
             snapshot_data[absolute_index] = value
 
         self.snapshot = bytes(snapshot_data)
@@ -267,3 +305,5 @@ class MemoryTracker:
         self.scan_steps = []
         self.scan_hits = {}
         self.scan_total = {}
+        self.marked_addresses = set()
+        self.value_history = {}
