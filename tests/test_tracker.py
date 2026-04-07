@@ -268,3 +268,100 @@ class TestMemoryTrackerScanWorkflow:
 
         assert t.scan_stats().steps == 0
         assert t.scan_match_level(0) == 0
+
+
+class TestMemoryTrackerValueHistory:
+    def test_no_history_on_first_update(self):
+        t = MemoryTracker()
+        t.update(b"\x00\x01")
+        assert t.get_value_history(0) == []
+
+    def test_history_recorded_on_change(self):
+        t = MemoryTracker()
+        t.update(b"\x00\x01")
+        t.update(b"\xFF\x01")
+        history = t.get_value_history(0)
+        assert len(history) == 1
+        assert history[0][1] == 0xFF
+
+    def test_unchanged_byte_has_no_history(self):
+        t = MemoryTracker()
+        t.update(b"\x00\x01")
+        t.update(b"\xFF\x01")
+        assert t.get_value_history(1) == []
+
+    def test_history_capped_at_max(self):
+        t = MemoryTracker()
+        t.update(bytes([0]))
+        for i in range(1, 15):
+            t.update(bytes([i]))
+        history = t.get_value_history(0)
+        assert len(history) == t.MAX_VALUE_HISTORY
+
+    def test_history_recorded_for_chunk_updates(self):
+        t = MemoryTracker()
+        t.update(b"\x00\x00\x00\x00")
+        t.update_chunk(1, b"\xAA\xBB")
+        history_1 = t.get_value_history(1)
+        history_2 = t.get_value_history(2)
+        assert len(history_1) == 1
+        assert history_1[0][1] == 0xAA
+        assert len(history_2) == 1
+        assert history_2[0][1] == 0xBB
+
+    def test_history_has_timestamps(self):
+        t = MemoryTracker()
+        t.update(b"\x00")
+        t.update(b"\x01")
+        history = t.get_value_history(0)
+        assert len(history) == 1
+        assert isinstance(history[0][0], float)
+        assert history[0][0] > 0
+
+    def test_history_cleared_on_source_reset(self):
+        t = MemoryTracker()
+        t.update(b"\x00", sender="10.0.0.1")
+        t.update(b"\xFF", sender="10.0.0.1")
+        assert len(t.get_value_history(0)) == 1
+        t.reset_for_new_source()
+        assert t.get_value_history(0) == []
+
+
+class TestMemoryTrackerMarkedAddresses:
+    def test_toggle_mark_marks_address(self):
+        t = MemoryTracker()
+        result = t.toggle_mark(5)
+        assert result is True
+        assert 5 in t.marked_addresses
+
+    def test_toggle_mark_unmarks_address(self):
+        t = MemoryTracker()
+        t.toggle_mark(5)
+        result = t.toggle_mark(5)
+        assert result is False
+        assert 5 not in t.marked_addresses
+
+    def test_export_marked_empty(self):
+        t = MemoryTracker()
+        assert t.export_marked() == []
+
+    def test_export_marked_with_snapshot(self):
+        t = MemoryTracker()
+        t.update(b"\xAA\xBB\xCC\xDD")
+        t.toggle_mark(1)
+        t.toggle_mark(3)
+        result = t.export_marked()
+        assert result == [(1, 0xBB), (3, 0xDD)]
+
+    def test_export_marked_no_snapshot(self):
+        t = MemoryTracker()
+        t.toggle_mark(0)
+        result = t.export_marked()
+        assert result == [(0, None)]
+
+    def test_marked_cleared_on_source_reset(self):
+        t = MemoryTracker()
+        t.toggle_mark(0)
+        t.toggle_mark(3)
+        t.reset_for_new_source()
+        assert len(t.marked_addresses) == 0
