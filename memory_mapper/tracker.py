@@ -79,6 +79,12 @@ class MemoryTracker:
                 result.append((addr, None))
         return result
 
+    def export_all(self) -> List[Tuple[int, int]]:
+        """Return list of (address, current_value) for every byte in the snapshot."""
+        if self.snapshot is None:
+            return []
+        return [(addr, self.snapshot[addr]) for addr in range(len(self.snapshot))]
+
     def update(self, data: bytes, sender: Optional[str] = None) -> Set[int]:
         """Update the stored snapshot and return the set of changed byte indices."""
         now = time.monotonic()

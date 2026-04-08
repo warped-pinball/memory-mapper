@@ -153,7 +153,8 @@ class TestSourceSelection:
         console.print(render_snapshot(t, selected_source="10.0.0.1"))
         output = buf.getvalue()
 
-        assert "all" not in output.lower()
+        assert "all sources" not in output.lower()
+        assert "0:all" not in output.lower()
         assert "1:10.0.0.1" in output
         assert "2:10.0.0.2" in output
 
@@ -304,8 +305,48 @@ class TestMarkingAndExport:
         with open(files[0]) as f:
             data = json.load(f)
         assert len(data) == 1
-        assert data[0]["address_hex"] == "0x0001"
-        assert data[0]["value_hex"] == "0xBB"
+        assert data[0]["address"] == "0x0001"
+        assert data[0]["value"] == "0xBB"
+        assert "address_dec" not in data[0]
+        assert "value_dec" not in data[0]
+        assert "value_bin" not in data[0]
+
+
+class TestExportAll:
+    def test_export_all_no_data(self):
+        t = MemoryTracker()
+        display = MemoryDisplay(t)
+        display._export_all()
+        assert "No data" in display.status_message
+
+    def test_export_all_creates_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        t = MemoryTracker()
+        t.update(b"\xAA\xBB\xCC")
+        display = MemoryDisplay(t)
+        display._export_all()
+        assert "Exported 3 addresses" in display.status_message
+        import glob as glob_mod
+        files = glob_mod.glob(str(tmp_path / "all_addresses_*.json"))
+        assert len(files) == 1
+        import json
+        with open(files[0]) as f:
+            data = json.load(f)
+        assert len(data) == 3
+        assert data[0]["address"] == "0x0000"
+        assert data[0]["value"] == "0xAA"
+        assert data[1]["address"] == "0x0001"
+        assert data[1]["value"] == "0xBB"
+        assert data[2]["address"] == "0x0002"
+        assert data[2]["value"] == "0xCC"
+
+    def test_x_key_triggers_export_all(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        t = MemoryTracker()
+        t.update(b"\x00\x01")
+        display = MemoryDisplay(t)
+        display._handle_input("x", stop_event=None)
+        assert "Exported 2 addresses" in display.status_message
 
 
 class TestAsciiMode:
