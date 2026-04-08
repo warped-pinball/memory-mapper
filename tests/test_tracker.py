@@ -365,3 +365,13 @@ class TestMemoryTrackerMarkedAddresses:
         t.toggle_mark(3)
         t.reset_for_new_source()
         assert len(t.marked_addresses) == 0
+
+    def test_export_all_empty_when_no_snapshot(self):
+        t = MemoryTracker()
+        assert t.export_all() == []
+
+    def test_export_all_returns_all_addresses(self):
+        t = MemoryTracker()
+        t.update(b"\xAA\xBB\xCC")
+        result = t.export_all()
+        assert result == [(0, 0xAA), (1, 0xBB), (2, 0xCC)]

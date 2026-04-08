@@ -85,7 +85,7 @@ def _render_menu(
     )
     nav_commands = (
         "[bold]Nav:[/bold] [cyan]←↑↓→[/cyan] move cursor  [cyan]Space[/cyan] mark  "
-        "[cyan]E[/cyan] export  [cyan]T[/cyan] ASCII "
+        "[cyan]E[/cyan] export marked  [cyan]X[/cyan] export all  [cyan]T[/cyan] ASCII "
         + ("[bright_green]ON[/bright_green]" if ascii_mode else "off")
         + "  [cyan]Q[/cyan] quit"
     )
@@ -329,6 +329,9 @@ class MemoryDisplay:
         if k == "e":
             self._export_marked()
             return
+        if k == "x":
+            self._export_all()
+            return
         if k == "t":
             self.ascii_mode = not self.ascii_mode
             self.status_message = f"ASCII view {'enabled' if self.ascii_mode else 'disabled'}"
@@ -381,15 +384,8 @@ class MemoryDisplay:
             return
         export_data = []
         for addr, val in entries:
-            entry = {"address_hex": f"0x{addr:04X}", "address_dec": addr}
-            if val is not None:
-                entry["value_hex"] = f"0x{val:02X}"
-                entry["value_dec"] = val
-                entry["value_bin"] = f"{val:08b}"
-            else:
-                entry["value_hex"] = None
-                entry["value_dec"] = None
-                entry["value_bin"] = None
+            entry: dict = {"address": f"0x{addr:04X}"}
+            entry["value"] = f"0x{val:02X}" if val is not None else None
             export_data.append(entry)
 
         filename = f"marked_addresses_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
@@ -397,6 +393,21 @@ class MemoryDisplay:
         with open(filepath, "w") as f:
             json.dump(export_data, f, indent=2)
         self.status_message = f"Exported {len(entries)} marked addresses to {filename}"
+
+    def _export_all(self) -> None:
+        entries = self.tracker.export_all()
+        if not entries:
+            self.status_message = "No data to export"
+            return
+        export_data = []
+        for addr, val in entries:
+            export_data.append({"address": f"0x{addr:04X}", "value": f"0x{val:02X}"})
+
+        filename = f"all_addresses_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
+        filepath = os.path.join(os.getcwd(), filename)
+        with open(filepath, "w") as f:
+            json.dump(export_data, f, indent=2)
+        self.status_message = f"Exported {len(entries)} addresses to {filename}"
 
     def _select_source(self, source_number: int) -> None:
         senders = self.tracker.known_senders()
