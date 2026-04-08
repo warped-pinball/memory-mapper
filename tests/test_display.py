@@ -371,8 +371,13 @@ class TestAsciiMode:
         console = Console(file=buf, width=200)
         console.print(render_snapshot(t, ascii_mode=True))
         output = buf.getvalue()
-        assert "ASCII" in output
-        assert "Hello World!" in output
+        assert "ASCII" in output  # menu shows "T ASCII ON"
+        # ASCII chars replace hex values, so individual chars appear but hex does not
+        for ch in "HelloWorld!":
+            assert ch in output
+        # Hex representations should NOT appear in the memory grid
+        assert "48" not in output  # 'H' = 0x48
+        assert "65" not in output  # 'e' = 0x65
 
     def test_non_printable_shown_as_dot(self):
         t = MemoryTracker()

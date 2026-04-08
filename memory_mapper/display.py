@@ -209,9 +209,6 @@ def render_snapshot(
     for col in range(effective_bpr):
         header.append(" ")
         header.append(f"{col:02X}", style=HEADER_STYLE)
-    if ascii_mode:
-        header.append("  ")
-        header.append("ASCII", style=HEADER_STYLE)
     memory_text.append(header)
 
     for row_start in range(0, size, effective_bpr):
@@ -220,16 +217,17 @@ def render_snapshot(
         line.append(f"{row_start:04X}", style="bright_cyan")
         for col, byte_val in enumerate(row_bytes):
             line.append(" ")
-            line.append(
-                f"{byte_val:02X}",
-                style=_byte_style(tracker, row_start + col, cursor_pos),
-            )
-        if ascii_mode:
-            line.append("  ")
-            for col, byte_val in enumerate(row_bytes):
+            if ascii_mode:
                 ch = chr(byte_val) if ASCII_PRINTABLE_START <= byte_val < ASCII_PRINTABLE_END else "·"
-                style = _byte_style(tracker, row_start + col, cursor_pos)
-                line.append(ch, style=style)
+                line.append(
+                    f" {ch}",
+                    style=_byte_style(tracker, row_start + col, cursor_pos),
+                )
+            else:
+                line.append(
+                    f"{byte_val:02X}",
+                    style=_byte_style(tracker, row_start + col, cursor_pos),
+                )
         memory_text.append(line)
 
     marked_count = len(tracker.marked_addresses)
