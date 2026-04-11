@@ -194,6 +194,9 @@ class TestCaptureKeypress:
             def isatty(self):
                 return True
 
+            def fileno(self):
+                return 0
+
         monkeypatch.setattr("memory_mapper.display.sys.stdin", FakeStdin())
         monkeypatch.setattr(
             "memory_mapper.display.select.select",
