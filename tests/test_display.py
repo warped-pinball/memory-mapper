@@ -519,3 +519,154 @@ class TestRenderWithMarkedStyle:
         console.print(render_snapshot(t))
         output = buf.getvalue()
         assert "Marked" in output
+
+
+class TestBitMode:
+    def test_bit_mode_toggle(self):
+        t = MemoryTracker()
+        display = MemoryDisplay(t)
+        assert display.bit_mode is False
+        display._handle_input("b", stop_event=None)
+        assert display.bit_mode is True
+        assert "enabled" in display.status_message
+        display._handle_input("b", stop_event=None)
+        assert display.bit_mode is False
+        assert "disabled" in display.status_message
+
+    def test_bit_mode_renders_without_error(self):
+        t = MemoryTracker()
+        t.update(b"\x00\x01\x02\x03")
+        from rich.console import Console
+        from io import StringIO
+
+        buf = StringIO()
+        console = Console(file=buf, width=200)
+        console.print(render_snapshot(t, bit_mode=True, cursor_pos=0))
+        output = buf.getvalue()
+        assert "Bit Mode" in output
+
+    def test_bit_mode_shows_bit_columns(self):
+        t = MemoryTracker()
+        t.update(b"\x05")  # 00000101
+        from rich.console import Console
+        from io import StringIO
+
+        buf = StringIO()
+        console = Console(file=buf, width=200)
+        console.print(render_snapshot(t, bit_mode=True))
+        output = buf.getvalue()
+        assert "b7" in output
+        assert "b0" in output
+
+    def test_bit_mode_menu_shows_set_cleared_options(self):
+        t = MemoryTracker()
+        t.update(b"\x00")
+        from rich.console import Console
+        from io import StringIO
+
+        buf = StringIO()
+        console = Console(file=buf, width=200)
+        console.print(render_snapshot(t, bit_mode=True))
+        output = buf.getvalue()
+        assert "S set(=1)" in output
+        assert "L cleared(=0)" in output
+        # byte-mode specific options should NOT appear
+        assert "I increased" not in output
+        assert "D decreased" not in output
+
+    def test_bit_mode_scan_routes_to_bit_scan(self):
+        t = MemoryTracker()
+        t.update(b"\xFF")
+        display = MemoryDisplay(t)
+        display.bit_mode = True
+        display._handle_input("s", stop_event=None)
+        assert "bit scan" in display.status_message.lower()
+        stats = t.bit_scan_stats()
+        assert stats.hard_match_count == 8
+
+    def test_bit_mode_reset_routes_to_bit_reset(self):
+        t = MemoryTracker()
+        t.update(b"\xFF")
+        display = MemoryDisplay(t)
+        display.bit_mode = True
+        display._handle_input("s", stop_event=None)
+        display._handle_input("r", stop_event=None)
+        assert "bit scan reset" in display.status_message.lower()
+        assert t.bit_scan_stats().steps == 0
+
+    def test_byte_mode_scan_not_affected_by_bit_scan(self):
+        t = MemoryTracker()
+        t.update(b"\x01")
+        display = MemoryDisplay(t)
+        # Start in byte mode, capture baseline
+        display._handle_input("c", stop_event=None)
+        # Switch to bit mode, do bit scan
+        display.bit_mode = True
+        display._handle_input("s", stop_event=None)
+        # Byte scan state should be untouched
+        assert t.scan_stats().steps == 0
+        assert t.bit_scan_stats().steps == 1
+
+    def test_bit_mode_no_data_renders(self):
+        t = MemoryTracker()
+        from rich.console import Console
+        from io import StringIO
+
+        buf = StringIO()
+        console = Console(file=buf, width=200)
+        console.print(render_snapshot(t, bit_mode=True))
+        output = buf.getvalue()
+        assert "Waiting" in output
+
+    def test_bit_mode_cursor_info_shows_bits(self):
+        t = MemoryTracker()
+        t.update(b"\x05")  # 00000101
+        from rich.console import Console
+        from io import StringIO
+
+        buf = StringIO()
+        console = Console(file=buf, width=200)
+        console.print(render_snapshot(t, bit_mode=True, cursor_pos=0))
+        output = buf.getvalue()
+        assert "Cursor (Bit Mode)" in output
+        assert "0x0000" in output
+
+    def test_bit_mode_filtered_view_after_scan(self):
+        t = MemoryTracker()
+        t.update(b"\x00\x00\x00\x00")
+        t.apply_bit_scan("c")
+        t.update(b"\x01\x00\x00\x04")  # byte 0 and 3 changed
+        t.apply_bit_scan("c")
+        from rich.console import Console
+        from io import StringIO
+
+        buf = StringIO()
+        console = Console(file=buf, width=200)
+        console.print(render_snapshot(t, bit_mode=True))
+        output = buf.getvalue()
+        assert "0x0000" in output
+        assert "0x0003" in output
+
+    def test_bit_mode_menu_shows_mode_label(self):
+        t = MemoryTracker()
+        t.update(b"\x00")
+        from rich.console import Console
+        from io import StringIO
+
+        buf = StringIO()
+        console = Console(file=buf, width=200)
+        console.print(render_snapshot(t, bit_mode=True))
+        output = buf.getvalue()
+        assert "BIT" in output
+
+    def test_byte_mode_menu_shows_mode_label(self):
+        t = MemoryTracker()
+        t.update(b"\x00")
+        from rich.console import Console
+        from io import StringIO
+
+        buf = StringIO()
+        console = Console(file=buf, width=200)
+        console.print(render_snapshot(t, bit_mode=False))
+        output = buf.getvalue()
+        assert "BYTE" in output
