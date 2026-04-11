@@ -194,6 +194,9 @@ class TestCaptureKeypress:
             def isatty(self):
                 return True
 
+            def fileno(self):
+                return 0
+
         monkeypatch.setattr("memory_mapper.display.sys.stdin", FakeStdin())
         monkeypatch.setattr(
             "memory_mapper.display.select.select",
@@ -545,9 +548,9 @@ class TestBitMode:
         output = buf.getvalue()
         assert "Bit Mode" in output
 
-    def test_bit_mode_shows_bit_columns(self):
+    def test_bit_mode_uses_hex_dump_layout(self):
         t = MemoryTracker()
-        t.update(b"\x05")  # 00000101
+        t.update(b"\x05\xAB\xCD")
         from rich.console import Console
         from io import StringIO
 
@@ -555,8 +558,11 @@ class TestBitMode:
         console = Console(file=buf, width=200)
         console.print(render_snapshot(t, bit_mode=True))
         output = buf.getvalue()
-        assert "b7" in output
-        assert "b0" in output
+        # Bit mode now uses the same hex dump layout as byte mode:
+        # a " Off" header row and a "0000" offset row with hex bytes.
+        assert " Off" in output
+        assert "0000" in output
+        assert "05 AB CD" in output
 
     def test_bit_mode_menu_shows_set_cleared_options(self):
         t = MemoryTracker()
@@ -628,10 +634,12 @@ class TestBitMode:
         console = Console(file=buf, width=200)
         console.print(render_snapshot(t, bit_mode=True, cursor_pos=0))
         output = buf.getvalue()
-        assert "Cursor (Bit Mode)" in output
+        # Cursor info panel is shared with byte mode, with colored bits.
+        assert "Cursor" in output
         assert "0x0000" in output
+        assert "00000101" in output
 
-    def test_bit_mode_filtered_view_after_scan(self):
+    def test_bit_mode_renders_all_bytes_after_scan(self):
         t = MemoryTracker()
         t.update(b"\x00\x00\x00\x00")
         t.apply_bit_scan("c")
@@ -644,8 +652,9 @@ class TestBitMode:
         console = Console(file=buf, width=200)
         console.print(render_snapshot(t, bit_mode=True))
         output = buf.getvalue()
-        assert "0x0000" in output
-        assert "0x0003" in output
+        # All bytes remain visible in the hex dump; scan state only colors them.
+        assert "0000" in output
+        assert "01 00 00 04" in output
 
     def test_bit_mode_menu_shows_mode_label(self):
         t = MemoryTracker()
