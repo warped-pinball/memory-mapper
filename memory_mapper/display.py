@@ -355,21 +355,30 @@ class MemoryDisplay:
             return None
         if not readable:
             return None
-        ch = os.read(fd, 1).decode("utf-8", errors="replace")
+        try:
+            ch = os.read(fd, 1).decode("utf-8", errors="replace")
+        except OSError:
+            return None
         if ch == "\x1b":
             try:
                 readable2, _, _ = select.select([fd], [], [], 0.05)
             except (OSError, ValueError):
                 return ch
             if readable2:
-                ch2 = os.read(fd, 1).decode("utf-8", errors="replace")
+                try:
+                    ch2 = os.read(fd, 1).decode("utf-8", errors="replace")
+                except OSError:
+                    return ch
                 if ch2 == "[":
                     try:
                         readable3, _, _ = select.select([fd], [], [], 0.05)
                     except (OSError, ValueError):
                         return ch
                     if readable3:
-                        ch3 = os.read(fd, 1).decode("utf-8", errors="replace")
+                        try:
+                            ch3 = os.read(fd, 1).decode("utf-8", errors="replace")
+                        except OSError:
+                            return ch
                         arrow_map = {"A": "UP", "B": "DOWN", "C": "RIGHT", "D": "LEFT"}
                         return arrow_map.get(ch3, ch3)
         return ch
