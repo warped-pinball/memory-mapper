@@ -375,3 +375,134 @@ class TestMemoryTrackerMarkedAddresses:
         t.update(b"\xAA\xBB\xCC")
         result = t.export_all()
         assert result == [(0, 0xAA), (1, 0xBB), (2, 0xCC)]
+
+
+class TestBitScanWorkflow:
+    def test_first_bit_scan_captures_baseline_only(self):
+        t = MemoryTracker()
+        t.update(b"\x0F")
+        assert not t.apply_bit_scan("c")
+        assert t.bit_scan_stats().steps == 0
+
+    def test_bit_scan_changed_detects_toggled_bits(self):
+        t = MemoryTracker()
+        t.update(b"\x0F")  # 00001111
+        t.apply_bit_scan("c")
+        t.update(b"\xF0")  # 11110000 — all 8 bits changed
+        assert t.apply_bit_scan("c")
+        stats = t.bit_scan_stats()
+        assert stats.steps == 1
+        assert stats.hard_match_count == 8
+
+    def test_bit_scan_unchanged_detects_stable_bits(self):
+        t = MemoryTracker()
+        t.update(b"\x0F")  # 00001111
+        t.apply_bit_scan("n")
+        t.update(b"\x0E")  # 00001110 — bit0 changed, 7 unchanged
+        assert t.apply_bit_scan("n")
+        stats = t.bit_scan_stats()
+        assert stats.hard_match_count == 7
+
+    def test_bit_scan_set_finds_high_bits(self):
+        t = MemoryTracker()
+        t.update(b"\x05")  # 00000101 — bits 0 and 2 are set
+        assert t.apply_bit_scan("s")
+        stats = t.bit_scan_stats()
+        assert stats.hard_match_count == 2
+
+    def test_bit_scan_cleared_finds_low_bits(self):
+        t = MemoryTracker()
+        t.update(b"\x05")  # 00000101 — 6 bits are 0
+        assert t.apply_bit_scan("l")
+        stats = t.bit_scan_stats()
+        assert stats.hard_match_count == 6
+
+    def test_bit_scan_set_does_not_need_baseline(self):
+        """set/cleared modes work without prior baseline capture."""
+        t = MemoryTracker()
+        t.update(b"\xFF")
+        assert t.apply_bit_scan("s")
+        assert t.bit_scan_stats().hard_match_count == 8
+
+    def test_bit_scan_any_refreshes_baseline_without_step(self):
+        t = MemoryTracker()
+        t.update(b"\x01")
+        assert not t.apply_bit_scan("c")
+        t.update(b"\x02")
+        assert not t.apply_bit_scan("a")
+        assert t.bit_scan_stats().steps == 0
+        t.update(b"\x03")
+        assert t.apply_bit_scan("c")
+        assert t.bit_scan_stats().steps == 1
+
+    def test_reset_bit_scan_clears_state(self):
+        t = MemoryTracker()
+        t.update(b"\x0F")
+        t.apply_bit_scan("c")
+        t.update(b"\xF0")
+        t.apply_bit_scan("c")
+        t.reset_bit_scan()
+        assert t.bit_scan_stats().steps == 0
+        assert t.bit_scan_match_level(0, 0) == 0
+
+    def test_bit_scan_match_level_returns_correct_levels(self):
+        t = MemoryTracker()
+        t.update(b"\x01")  # bit0 = 1
+        t.apply_bit_scan("c")
+        t.update(b"\x00")  # bit0 = 0 (changed)
+        t.apply_bit_scan("c")
+        assert t.bit_scan_match_level(0, 0) == 3  # hard match
+
+    def test_bit_scan_soft_match_levels(self):
+        t = MemoryTracker()
+        t.update(b"\x00")
+        t.apply_bit_scan("c")
+
+        # Step 1: bit0 changes
+        t.update(b"\x01")
+        t.apply_bit_scan("c")
+
+        # Step 2: bit0 unchanged (miss)
+        t.update(b"\x01")
+        t.apply_bit_scan("c")
+
+        # Step 3: bit0 changes again
+        t.update(b"\x00")
+        t.apply_bit_scan("c")
+
+        # 3 steps total, bit0 hit in step 1 & 3, missed step 2 -> 1 miss -> soft match level 2
+        assert t.bit_scan_match_level(0, 0) == 2
+
+    def test_get_bit_scan_matching_bytes(self):
+        t = MemoryTracker()
+        t.update(b"\x00\x00\x00")
+        t.apply_bit_scan("c")
+        t.update(b"\x01\x00\x04")  # byte 0 bit0 changed, byte 2 bit2 changed
+        t.apply_bit_scan("c")
+        matching = t.get_bit_scan_matching_bytes()
+        assert 0 in matching
+        assert 2 in matching
+
+    def test_bit_scan_cleared_on_source_reset(self):
+        t = MemoryTracker()
+        t.update(b"\xFF", sender="10.0.0.1")
+        t.apply_bit_scan("s")
+        t.reset_for_new_source()
+        assert t.bit_scan_stats().steps == 0
+        assert t.bit_scan_match_level(0, 0) == 0
+
+    def test_bit_scan_narrowing_workflow(self):
+        """Simulate a typical narrowing workflow: set -> changed -> changed."""
+        t = MemoryTracker()
+        t.update(b"\xFF\x00")  # byte 0 all set, byte 1 all clear
+        t.apply_bit_scan("s")  # find bits that are 1: all 8 bits of byte 0
+        stats = t.bit_scan_stats()
+        assert stats.hard_match_count == 8
+
+        # "c" needs a baseline; first call captures it
+        t.update(b"\xFE\x01")  # byte 0 bit0 cleared, byte 1 bit0 set
+        t.apply_bit_scan("c")  # captures baseline (no step added)
+        t.update(b"\xFD\x02")  # more changes
+        t.apply_bit_scan("c")  # now compares against baseline
+        stats = t.bit_scan_stats()
+        assert stats.steps == 2

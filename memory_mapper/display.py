@@ -27,7 +27,7 @@ from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 
-from .tracker import MemoryTracker, SCAN_MODES
+from .tracker import MemoryTracker, SCAN_MODES, BIT_SCAN_MODES
 
 HIGHLIGHT_DURATION_MIN = 0.5
 HIGHLIGHT_DURATION_MAX = 30.0
@@ -61,9 +61,10 @@ def _render_menu(
     selected_source: Optional[str],
     status_message: str,
     ascii_mode: bool = False,
+    bit_mode: bool = False,
 ) -> Panel:
     senders = tracker.known_senders()
-    stats = tracker.scan_stats()
+    stats = tracker.bit_scan_stats() if bit_mode else tracker.scan_stats()
 
     menu = Table.grid(expand=True)
     menu.add_column(ratio=5)
@@ -82,15 +83,25 @@ def _render_menu(
     age = tracker.data_age_seconds()
     age_text = "—" if age is None else f"{age:.1f}s"
 
-    scan_commands = (
-        "[bold]Scan:[/bold] [cyan]C[/cyan] changed  [cyan]N[/cyan] unchanged  "
-        "[cyan]I[/cyan] increased  [cyan]D[/cyan] decreased  [cyan]A[/cyan] any/not sure  "
-        "[cyan]R[/cyan] reset scan"
-    )
+    mode_label = "[bright_green]BIT[/bright_green]" if bit_mode else "BYTE"
+
+    if bit_mode:
+        scan_commands = (
+            "[bold]Scan:[/bold] [cyan]C[/cyan] changed  [cyan]N[/cyan] unchanged  "
+            "[cyan]S[/cyan] set(=1)  [cyan]L[/cyan] cleared(=0)  [cyan]A[/cyan] any/not sure  "
+            "[cyan]R[/cyan] reset scan"
+        )
+    else:
+        scan_commands = (
+            "[bold]Scan:[/bold] [cyan]C[/cyan] changed  [cyan]N[/cyan] unchanged  "
+            "[cyan]I[/cyan] increased  [cyan]D[/cyan] decreased  [cyan]A[/cyan] any/not sure  "
+            "[cyan]R[/cyan] reset scan"
+        )
     nav_commands = (
         "[bold]Nav:[/bold] [cyan]←↑↓→[/cyan] move cursor  [cyan]Space[/cyan] mark  "
         "[cyan]E[/cyan] export marked  [cyan]X[/cyan] export all  [cyan]T[/cyan] ASCII "
         + ("[bright_green]ON[/bright_green]" if ascii_mode else "off")
+        + f"  [cyan]B[/cyan] mode:{mode_label}"
         + "  [cyan]+/-[/cyan] highlight time  [cyan]Q[/cyan] quit"
     )
 
@@ -140,6 +151,22 @@ def _byte_style(
     return None
 
 
+def _bit_style(
+    tracker: MemoryTracker,
+    byte_idx: int,
+    bit_idx: int,
+) -> Optional[Style]:
+    """Return the highlight style for an individual bit based on bit scan results."""
+    match_level = tracker.bit_scan_match_level(byte_idx, bit_idx)
+    if match_level == 3:
+        return HARD_MATCH_STYLE
+    if match_level == 2:
+        return SOFT_MATCH_1_STYLE
+    if match_level == 1:
+        return SOFT_MATCH_2_STYLE
+    return None
+
+
 def _render_cursor_info(
     tracker: MemoryTracker,
     cursor_pos: int,
@@ -181,6 +208,120 @@ def _render_cursor_info(
     )
 
 
+BITS_PER_ROW = 4  # number of bytes shown per row in bit mode
+
+
+def _render_bit_cursor_info(
+    tracker: MemoryTracker,
+    cursor_pos: int,
+) -> Panel:
+    """Render cursor info panel for bit mode, showing per-bit match details."""
+    snapshot = tracker.snapshot
+    if snapshot is not None and 0 <= cursor_pos < len(snapshot):
+        value = snapshot[cursor_pos]
+        is_marked = cursor_pos in tracker.marked_addresses
+        mark_label = " [bright_red]★ MARKED[/bright_red]" if is_marked else ""
+        info_markup = (
+            f"[bold]Addr:[/bold] 0x{cursor_pos:04X} ({cursor_pos}){mark_label}  "
+            f"[bold]Hex:[/bold] 0x{value:02X}  "
+            f"[bold]Dec:[/bold] {value}"
+        )
+        # Show each bit with its match level
+        bits_text = Text()
+        bits_text.append("\nBits: ", style="bold")
+        for bit_idx in range(7, -1, -1):
+            bit_val = (value >> bit_idx) & 1
+            style = _bit_style(tracker, cursor_pos, bit_idx)
+            bits_text.append(str(bit_val), style=style)
+        bits_text.append("  (MSB←→LSB)")
+
+        return Panel(
+            Group(info_markup, bits_text),
+            border_style="bright_black",
+            padding=(0, 1),
+            title="[bold]Cursor (Bit Mode)[/bold]",
+        )
+    else:
+        return Panel(
+            "[dim]No data at cursor position[/dim]",
+            border_style="bright_black",
+            padding=(0, 1),
+            title="[bold]Cursor (Bit Mode)[/bold]",
+        )
+
+
+def _render_bit_view(
+    tracker: MemoryTracker,
+    cursor_pos: Optional[int] = None,
+) -> Panel:
+    """Render the memory panel in bit mode, showing a filtered table of bits."""
+    snapshot = tracker.snapshot
+    if snapshot is None:
+        body = Text("Waiting for data…", style=DIM_STYLE, justify="center")
+        return Panel(body, title="[bold bright_blue]Memory Mapper (Bit Mode)[/bold bright_blue]",
+                     border_style="bright_blue")
+
+    has_scan = len(tracker.bit_scan_total) > 0
+    if has_scan:
+        visible_bytes = tracker.get_bit_scan_matching_bytes()
+    else:
+        visible_bytes = list(range(len(snapshot)))
+
+    if not visible_bytes:
+        body = Text("No matching bits found. Adjust scan filters or reset.",
+                     style=DIM_STYLE, justify="center")
+        matched = len(tracker.bit_scan_total)
+        status = (
+            f"[dim]Packets[/dim] [bold]{tracker.packet_count}[/bold]  "
+            f"[dim]Size[/dim] [bold]{len(snapshot)}B[/bold]  "
+            f"[dim]Bits scanned[/dim] [bold]{matched}[/bold]  "
+            f"[dim]Matching bytes[/dim] [bold]0[/bold]"
+        )
+        return Panel(body, title="[bold bright_blue]Memory Mapper (Bit Mode)[/bold bright_blue]",
+                     subtitle=status, border_style="bright_blue", expand=True)
+
+    # Build a table: Address | Hex | Bit7 Bit6 Bit5 Bit4 Bit3 Bit2 Bit1 Bit0
+    table = Table(show_header=True, header_style=HEADER_STYLE, expand=True,
+                  show_lines=False, pad_edge=False)
+    table.add_column("Address", style="bright_cyan", width=8)
+    table.add_column("Hex", width=4)
+    for bit_idx in range(7, -1, -1):
+        table.add_column(f"b{bit_idx}", width=3, justify="center")
+
+    for byte_idx in visible_bytes:
+        if byte_idx >= len(snapshot):
+            continue
+        value = snapshot[byte_idx]
+        is_cursor = cursor_pos is not None and byte_idx == cursor_pos
+        is_marked = byte_idx in tracker.marked_addresses
+
+        addr_style = CURSOR_STYLE if is_cursor else (MARKED_STYLE if is_marked else None)
+        addr_text = Text(f"0x{byte_idx:04X}", style=addr_style)
+        hex_text = Text(f"{value:02X}", style=addr_style)
+
+        bit_cells = []
+        for bit_idx in range(7, -1, -1):
+            bit_val = (value >> bit_idx) & 1
+            style = _bit_style(tracker, byte_idx, bit_idx)
+            if is_cursor and style is None:
+                style = CURSOR_STYLE
+            bit_cells.append(Text(str(bit_val), style=style))
+
+        table.add_row(addr_text, hex_text, *bit_cells)
+
+    marked_count = len(tracker.marked_addresses)
+    status = (
+        f"[dim]Packets[/dim] [bold]{tracker.packet_count}[/bold]  "
+        f"[dim]Size[/dim] [bold]{len(snapshot)}B[/bold]  "
+        f"[dim]Highlight[/dim] [bold]{tracker.highlight_duration:.1f}s[/bold]  "
+        f"[dim]Marked[/dim] [bold]{marked_count}[/bold]  "
+        f"[dim]Showing[/dim] [bold]{len(visible_bytes)}[/bold] bytes"
+    )
+    return Panel(table,
+                 title="[bold bright_blue]Memory Mapper (Bit Mode)[/bold bright_blue]",
+                 subtitle=status, border_style="bright_blue", expand=True)
+
+
 def render_snapshot(
     tracker: MemoryTracker,
     bytes_per_row: int = BYTES_PER_ROW,
@@ -189,9 +330,22 @@ def render_snapshot(
     status_message: str = "Ready",
     cursor_pos: Optional[int] = None,
     ascii_mode: bool = False,
+    bit_mode: bool = False,
 ):
     snapshot = tracker.snapshot
-    menu_panel = _render_menu(tracker, selected_source, status_message, ascii_mode=ascii_mode)
+    menu_panel = _render_menu(
+        tracker, selected_source, status_message,
+        ascii_mode=ascii_mode, bit_mode=bit_mode,
+    )
+
+    if bit_mode:
+        memory_panel = _render_bit_view(tracker, cursor_pos=cursor_pos)
+        panels = [memory_panel]
+        if cursor_pos is not None:
+            panels.append(_render_bit_cursor_info(tracker, cursor_pos))
+        panels.append(_render_legend())
+        panels.append(menu_panel)
+        return Group(*panels)
 
     if snapshot is None:
         body = Text("Waiting for data…", style=DIM_STYLE, justify="center")
@@ -272,6 +426,7 @@ class MemoryDisplay:
         self.status_message = "Waiting for first snapshot"
         self.cursor_pos: int = 0
         self.ascii_mode: bool = False
+        self.bit_mode: bool = False
         self._effective_bpr: int = bytes_per_row
 
     def _capture_keypress(self) -> Optional[str]:
@@ -338,6 +493,10 @@ class MemoryDisplay:
             self.ascii_mode = not self.ascii_mode
             self.status_message = f"ASCII view {'enabled' if self.ascii_mode else 'disabled'}"
             return
+        if k == "b":
+            self.bit_mode = not self.bit_mode
+            self.status_message = f"Bit mode {'enabled' if self.bit_mode else 'disabled'}"
+            return
         if k in ("+", "="):
             new_val = min(
                 HIGHLIGHT_DURATION_MAX,
@@ -355,13 +514,26 @@ class MemoryDisplay:
             self.status_message = f"Highlight duration: {new_val:.1f}s"
             return
         if k == "r":
-            self.tracker.reset_scan()
-            self.status_message = "Scan reset. Baseline captured from current snapshot."
+            if self.bit_mode:
+                self.tracker.reset_bit_scan()
+                self.status_message = "Bit scan reset. Baseline captured from current snapshot."
+            else:
+                self.tracker.reset_scan()
+                self.status_message = "Scan reset. Baseline captured from current snapshot."
             return
         if k.isdigit() and k != "0":
             self._select_source(int(k))
             return
-        if k in SCAN_MODES:
+        if self.bit_mode and k in BIT_SCAN_MODES:
+            applied = self.tracker.apply_bit_scan(k)
+            if applied:
+                self.status_message = f"Applied bit scan filter: {BIT_SCAN_MODES[k]}"
+            elif k == "a":
+                self.status_message = "Captured a fresh baseline (any/not sure)."
+            else:
+                self.status_message = "Captured baseline; press scan option again after values change."
+            return
+        if not self.bit_mode and k in SCAN_MODES:
             applied = self.tracker.apply_scan(k)
             if applied:
                 self.status_message = f"Applied scan filter: {SCAN_MODES[k]}"
@@ -462,6 +634,7 @@ class MemoryDisplay:
                     status_message=self.status_message,
                     cursor_pos=self.cursor_pos,
                     ascii_mode=self.ascii_mode,
+                    bit_mode=self.bit_mode,
                 ),
                 console=self._console,
                 refresh_per_second=self.refresh_per_second,
@@ -486,6 +659,7 @@ class MemoryDisplay:
                                 status_message=self.status_message,
                                 cursor_pos=self.cursor_pos,
                                 ascii_mode=self.ascii_mode,
+                                bit_mode=self.bit_mode,
                             )
                         )
                 except KeyboardInterrupt:

@@ -13,6 +13,14 @@ SCAN_MODES = {
     "a": "any / not sure",
 }
 
+BIT_SCAN_MODES = {
+    "c": "changed",
+    "n": "unchanged",
+    "s": "set (=1)",
+    "l": "cleared (=0)",
+    "a": "any / not sure",
+}
+
 
 @dataclass
 class ScanStats:
@@ -48,6 +56,12 @@ class MemoryTracker:
 
         self.marked_addresses: Set[int] = set()
         self.value_history: Dict[int, Deque[Tuple[float, int]]] = {}
+
+        # Bit-level scan state
+        self.bit_scan_baseline: Optional[bytes] = None
+        self.bit_scan_steps: list[str] = []
+        self.bit_scan_hits: Dict[int, int] = {}   # key = byte_idx * 8 + bit_idx
+        self.bit_scan_total: Dict[int, int] = {}
 
     def _record_value_change(self, index: int, new_value: int, timestamp: float) -> None:
         """Record a value change in the history for the given address."""
@@ -202,6 +216,114 @@ class MemoryTracker:
             return new < old
         return False
 
+    def apply_bit_scan(self, mode_key: str) -> bool:
+        """Apply an iterative bit-level scan comparison."""
+        if self.snapshot is None or mode_key not in BIT_SCAN_MODES:
+            return False
+
+        if mode_key == "a":
+            self.bit_scan_baseline = bytes(self.snapshot)
+            return False
+
+        needs_baseline = mode_key in ("c", "n")
+        if needs_baseline and self.bit_scan_baseline is None:
+            self.bit_scan_baseline = bytes(self.snapshot)
+            return False
+
+        current = self.snapshot
+        baseline = self.bit_scan_baseline
+
+        self.bit_scan_steps.append(mode_key)
+
+        if needs_baseline:
+            compare_len = min(len(current), len(baseline))
+            if compare_len == 0:
+                self.bit_scan_baseline = bytes(current)
+                return False
+        else:
+            compare_len = len(current)
+
+        for byte_idx in range(compare_len):
+            cur_byte = current[byte_idx]
+            old_byte = baseline[byte_idx] if baseline is not None and byte_idx < len(baseline) else 0
+            for bit_idx in range(8):
+                flat = byte_idx * 8 + bit_idx
+                cur_bit = (cur_byte >> bit_idx) & 1
+                old_bit = (old_byte >> bit_idx) & 1
+                matched = self._bit_mode_matches(mode_key, old_bit, cur_bit)
+                self.bit_scan_total[flat] = self.bit_scan_total.get(flat, 0) + 1
+                if matched:
+                    self.bit_scan_hits[flat] = self.bit_scan_hits.get(flat, 0) + 1
+
+        if baseline is not None:
+            self.bit_scan_baseline = bytes(current)
+        return True
+
+    def _bit_mode_matches(self, mode_key: str, old_bit: int, cur_bit: int) -> bool:
+        if mode_key == "c":
+            return cur_bit != old_bit
+        if mode_key == "n":
+            return cur_bit == old_bit
+        if mode_key == "s":
+            return cur_bit == 1
+        if mode_key == "l":
+            return cur_bit == 0
+        return False
+
+    def reset_bit_scan(self) -> None:
+        self.bit_scan_baseline = bytes(self.snapshot) if self.snapshot is not None else None
+        self.bit_scan_steps = []
+        self.bit_scan_hits = {}
+        self.bit_scan_total = {}
+
+    def bit_scan_stats(self) -> ScanStats:
+        compared = len(self.bit_scan_total)
+        hard = 0
+        soft1 = 0
+        soft2 = 0
+        for flat, total in self.bit_scan_total.items():
+            hits = self.bit_scan_hits.get(flat, 0)
+            misses = total - hits
+            if misses == 0 and total > 0:
+                hard += 1
+            elif misses == 1:
+                soft1 += 1
+            elif misses == 2:
+                soft2 += 1
+        return ScanStats(
+            steps=len(self.bit_scan_steps),
+            compared_bytes=compared,
+            hard_match_count=hard,
+            soft_match_count_1=soft1,
+            soft_match_count_2=soft2,
+        )
+
+    def bit_scan_match_level(self, byte_idx: int, bit_idx: int) -> int:
+        """Return match level for a bit (0=none, 1=soft 2miss, 2=soft 1miss, 3=hard)."""
+        flat = byte_idx * 8 + bit_idx
+        total = self.bit_scan_total.get(flat, 0)
+        if total == 0:
+            return 0
+        hits = self.bit_scan_hits.get(flat, 0)
+        misses = total - hits
+        if misses == 0:
+            return 3
+        if misses == 1:
+            return 2
+        if misses == 2:
+            return 1
+        return 0
+
+    def get_bit_scan_matching_bytes(self) -> List[int]:
+        """Return sorted list of byte indices that have at least one matching bit."""
+        matching: Set[int] = set()
+        for flat, total in self.bit_scan_total.items():
+            hits = self.bit_scan_hits.get(flat, 0)
+            misses = total - hits
+            if misses <= 2 and total > 0:
+                matching.add(flat // 8)
+        return sorted(matching)
+
     def reset_scan(self) -> None:
         self.scan_baseline = bytes(self.snapshot) if self.snapshot is not None else None
         self.scan_steps = []
@@ -313,3 +435,7 @@ class MemoryTracker:
         self.scan_total = {}
         self.marked_addresses = set()
         self.value_history = {}
+        self.bit_scan_baseline = None
+        self.bit_scan_steps = []
+        self.bit_scan_hits = {}
+        self.bit_scan_total = {}
