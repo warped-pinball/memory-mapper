@@ -134,12 +134,21 @@ def _byte_style(
     tracker: MemoryTracker,
     index: int,
     cursor_pos: Optional[int] = None,
+    bit_mode: bool = False,
 ):
     if cursor_pos is not None and index == cursor_pos:
         return CURSOR_STYLE
     if index in tracker.marked_addresses:
         return MARKED_STYLE
-    match_level = tracker.scan_match_level(index)
+    if bit_mode:
+        # Use the best (highest) match level across the 8 bits of this byte.
+        match_level = 0
+        for bit_idx in range(8):
+            level = tracker.bit_scan_match_level(index, bit_idx)
+            if level > match_level:
+                match_level = level
+    else:
+        match_level = tracker.scan_match_level(index)
     if match_level == 3:
         return HARD_MATCH_STYLE
     if match_level == 2:
@@ -170,156 +179,57 @@ def _bit_style(
 def _render_cursor_info(
     tracker: MemoryTracker,
     cursor_pos: int,
+    bit_mode: bool = False,
 ) -> Panel:
     """Render the info panel showing current cursor address details and value history."""
     snapshot = tracker.snapshot
-    info = Text()
-    if snapshot is not None and 0 <= cursor_pos < len(snapshot):
-        value = snapshot[cursor_pos]
-        is_marked = cursor_pos in tracker.marked_addresses
-        mark_label = " [bright_red]★ MARKED[/bright_red]" if is_marked else ""
-        info_markup = (
-            f"[bold]Addr:[/bold] 0x{cursor_pos:04X} ({cursor_pos}){mark_label}  "
-            f"[bold]Hex:[/bold] 0x{value:02X}  "
-            f"[bold]Dec:[/bold] {value}  "
-            f"[bold]Bin:[/bold] {value:08b}  "
-            f"[bold]ASCII:[/bold] {chr(value) if ASCII_PRINTABLE_START <= value < ASCII_PRINTABLE_END else '·'}"
-        )
-        history = tracker.get_value_history(cursor_pos)
-        if history:
-            info_markup += "\n[bold]History (last 10):[/bold] "
-            parts = []
-            for ts, val in history[-10:]:
-                age = time.monotonic() - ts
-                if age < 60:
-                    age_str = f"{age:.1f}s ago"
-                else:
-                    age_str = f"{age / 60:.1f}m ago"
-                parts.append(f"0x{val:02X}({age_str})")
-            info_markup += "  ".join(parts)
-    else:
-        info_markup = "[dim]No data at cursor position[/dim]"
-
-    return Panel(
-        info_markup,
-        border_style="bright_black",
-        padding=(0, 1),
-        title="[bold]Cursor[/bold]",
-    )
-
-
-BITS_PER_ROW = 4  # number of bytes shown per row in bit mode
-
-
-def _render_bit_cursor_info(
-    tracker: MemoryTracker,
-    cursor_pos: int,
-) -> Panel:
-    """Render cursor info panel for bit mode, showing per-bit match details."""
-    snapshot = tracker.snapshot
-    if snapshot is not None and 0 <= cursor_pos < len(snapshot):
-        value = snapshot[cursor_pos]
-        is_marked = cursor_pos in tracker.marked_addresses
-        mark_label = " [bright_red]★ MARKED[/bright_red]" if is_marked else ""
-        info_markup = (
-            f"[bold]Addr:[/bold] 0x{cursor_pos:04X} ({cursor_pos}){mark_label}  "
-            f"[bold]Hex:[/bold] 0x{value:02X}  "
-            f"[bold]Dec:[/bold] {value}"
-        )
-        # Show each bit with its match level
-        bits_text = Text()
-        bits_text.append("\nBits: ", style="bold")
-        for bit_idx in range(7, -1, -1):
-            bit_val = (value >> bit_idx) & 1
-            style = _bit_style(tracker, cursor_pos, bit_idx)
-            bits_text.append(str(bit_val), style=style)
-        bits_text.append("  (MSB←→LSB)")
-
-        return Panel(
-            Group(info_markup, bits_text),
-            border_style="bright_black",
-            padding=(0, 1),
-            title="[bold]Cursor (Bit Mode)[/bold]",
-        )
-    else:
+    if snapshot is None or not (0 <= cursor_pos < len(snapshot)):
         return Panel(
             "[dim]No data at cursor position[/dim]",
             border_style="bright_black",
             padding=(0, 1),
-            title="[bold]Cursor (Bit Mode)[/bold]",
+            title="[bold]Cursor[/bold]",
         )
 
+    value = snapshot[cursor_pos]
+    is_marked = cursor_pos in tracker.marked_addresses
+    mark_label = " [bright_red]★ MARKED[/bright_red]" if is_marked else ""
+    ascii_ch = chr(value) if ASCII_PRINTABLE_START <= value < ASCII_PRINTABLE_END else "·"
 
-def _render_bit_view(
-    tracker: MemoryTracker,
-    cursor_pos: Optional[int] = None,
-) -> Panel:
-    """Render the memory panel in bit mode, showing a filtered table of bits."""
-    snapshot = tracker.snapshot
-    if snapshot is None:
-        body = Text("Waiting for data…", style=DIM_STYLE, justify="center")
-        return Panel(body, title="[bold bright_blue]Memory Mapper (Bit Mode)[/bold bright_blue]",
-                     border_style="bright_blue")
-
-    has_scan = len(tracker.bit_scan_total) > 0
-    if has_scan:
-        visible_bytes = tracker.get_bit_scan_matching_bytes()
-    else:
-        visible_bytes = list(range(len(snapshot)))
-
-    if not visible_bytes:
-        body = Text("No matching bits found. Adjust scan filters or reset.",
-                     style=DIM_STYLE, justify="center")
-        matched = len(tracker.bit_scan_total)
-        status = (
-            f"[dim]Packets[/dim] [bold]{tracker.packet_count}[/bold]  "
-            f"[dim]Size[/dim] [bold]{len(snapshot)}B[/bold]  "
-            f"[dim]Bits scanned[/dim] [bold]{matched}[/bold]  "
-            f"[dim]Matching bytes[/dim] [bold]0[/bold]"
-        )
-        return Panel(body, title="[bold bright_blue]Memory Mapper (Bit Mode)[/bold bright_blue]",
-                     subtitle=status, border_style="bright_blue", expand=True)
-
-    # Build a table: Address | Hex | Bit7 Bit6 Bit5 Bit4 Bit3 Bit2 Bit1 Bit0
-    table = Table(show_header=True, header_style=HEADER_STYLE, expand=True,
-                  show_lines=False, pad_edge=False)
-    table.add_column("Address", style="bright_cyan", width=8)
-    table.add_column("Hex", width=4)
-    for bit_idx in range(7, -1, -1):
-        table.add_column(f"b{bit_idx}", width=3, justify="center")
-
-    for byte_idx in visible_bytes:
-        if byte_idx >= len(snapshot):
-            continue
-        value = snapshot[byte_idx]
-        is_cursor = cursor_pos is not None and byte_idx == cursor_pos
-        is_marked = byte_idx in tracker.marked_addresses
-
-        addr_style = CURSOR_STYLE if is_cursor else (MARKED_STYLE if is_marked else None)
-        addr_text = Text(f"0x{byte_idx:04X}", style=addr_style)
-        hex_text = Text(f"{value:02X}", style=addr_style)
-
-        bit_cells = []
-        for bit_idx in range(7, -1, -1):
-            bit_val = (value >> bit_idx) & 1
-            style = _bit_style(tracker, byte_idx, bit_idx)
-            if is_cursor and style is None:
-                style = CURSOR_STYLE
-            bit_cells.append(Text(str(bit_val), style=style))
-
-        table.add_row(addr_text, hex_text, *bit_cells)
-
-    marked_count = len(tracker.marked_addresses)
-    status = (
-        f"[dim]Packets[/dim] [bold]{tracker.packet_count}[/bold]  "
-        f"[dim]Size[/dim] [bold]{len(snapshot)}B[/bold]  "
-        f"[dim]Highlight[/dim] [bold]{tracker.highlight_duration:.1f}s[/bold]  "
-        f"[dim]Marked[/dim] [bold]{marked_count}[/bold]  "
-        f"[dim]Showing[/dim] [bold]{len(visible_bytes)}[/bold] bytes"
+    info_line = Text.from_markup(
+        f"[bold]Addr:[/bold] 0x{cursor_pos:04X} ({cursor_pos}){mark_label}  "
+        f"[bold]Hex:[/bold] 0x{value:02X}  "
+        f"[bold]Dec:[/bold] {value}  "
+        f"[bold]Bin:[/bold] "
     )
-    return Panel(table,
-                 title="[bold bright_blue]Memory Mapper (Bit Mode)[/bold bright_blue]",
-                 subtitle=status, border_style="bright_blue", expand=True)
+    for bit_idx in range(7, -1, -1):
+        bit_val = (value >> bit_idx) & 1
+        style = _bit_style(tracker, cursor_pos, bit_idx) if bit_mode else None
+        info_line.append(str(bit_val), style=style)
+    info_line.append_text(Text.from_markup(f"  [bold]ASCII:[/bold] {ascii_ch}"))
+
+    parts = [info_line]
+
+    history = tracker.get_value_history(cursor_pos)
+    if history:
+        history_markup = "[bold]History (last 10):[/bold] "
+        hist_parts = []
+        for ts, val in history[-10:]:
+            age = time.monotonic() - ts
+            if age < 60:
+                age_str = f"{age:.1f}s ago"
+            else:
+                age_str = f"{age / 60:.1f}m ago"
+            hist_parts.append(f"0x{val:02X}({age_str})")
+        history_markup += "  ".join(hist_parts)
+        parts.append(Text.from_markup(history_markup))
+
+    return Panel(
+        Group(*parts),
+        border_style="bright_black",
+        padding=(0, 1),
+        title="[bold]Cursor[/bold]",
+    )
 
 
 def render_snapshot(
@@ -338,18 +248,15 @@ def render_snapshot(
         ascii_mode=ascii_mode, bit_mode=bit_mode,
     )
 
-    if bit_mode:
-        memory_panel = _render_bit_view(tracker, cursor_pos=cursor_pos)
-        panels = [memory_panel]
-        if cursor_pos is not None:
-            panels.append(_render_bit_cursor_info(tracker, cursor_pos))
-        panels.append(_render_legend())
-        panels.append(menu_panel)
-        return Group(*panels)
+    title = (
+        "[bold bright_blue]Memory Mapper"
+        + (" (Bit Mode)" if bit_mode else "")
+        + "[/bold bright_blue]"
+    )
 
     if snapshot is None:
         body = Text("Waiting for data…", style=DIM_STYLE, justify="center")
-        memory_panel = Panel(body, title="[bold]Memory Mapper[/bold]", border_style="bright_blue")
+        memory_panel = Panel(body, title=title, border_style="bright_blue")
         return Group(memory_panel, _render_legend(), menu_panel)
 
     tracker.cleanup_old_changes()
@@ -375,12 +282,12 @@ def render_snapshot(
                 ch = chr(byte_val) if ASCII_PRINTABLE_START <= byte_val < ASCII_PRINTABLE_END else "·"
                 line.append(
                     f" {ch}",
-                    style=_byte_style(tracker, row_start + col, cursor_pos),
+                    style=_byte_style(tracker, row_start + col, cursor_pos, bit_mode=bit_mode),
                 )
             else:
                 line.append(
                     f"{byte_val:02X}",
-                    style=_byte_style(tracker, row_start + col, cursor_pos),
+                    style=_byte_style(tracker, row_start + col, cursor_pos, bit_mode=bit_mode),
                 )
         memory_text.append(line)
 
@@ -394,7 +301,7 @@ def render_snapshot(
 
     memory_panel = Panel(
         memory_text,
-        title="[bold bright_blue]Memory Mapper[/bold bright_blue]",
+        title=title,
         subtitle=status,
         border_style="bright_blue",
         expand=True,
@@ -402,7 +309,7 @@ def render_snapshot(
 
     panels = [memory_panel]
     if cursor_pos is not None:
-        panels.append(_render_cursor_info(tracker, cursor_pos))
+        panels.append(_render_cursor_info(tracker, cursor_pos, bit_mode=bit_mode))
     panels.append(_render_legend())
     panels.append(menu_panel)
     return Group(*panels)
