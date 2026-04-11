@@ -241,7 +241,8 @@ class TestMemoryTrackerScanWorkflow:
         assert stats.steps == 2
         assert stats.hard_match_count == 1
         assert t.scan_match_level(0) == 3
-        assert t.scan_match_level(2) == 1
+        # byte 2 decreased both steps (0 hits), so no soft match
+        assert t.scan_match_level(2) == 0
 
 
     def test_any_scan_mode_refreshes_baseline_without_step(self):
