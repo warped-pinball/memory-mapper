@@ -107,6 +107,10 @@ On Ubuntu, download the `.deb` package and open it to install (or run `sudo apt 
 
 Download the appropriate artifact from the **Actions** tab or from the **Releases** page.
 
+### Pull request previews
+
+Every pull request also triggers the [PR Build](.github/workflows/pr-build.yml) workflow, which builds the same set of installers from the PR's HEAD commit. A companion [PR Build Comment](.github/workflows/pr-build-comment.yml) workflow then posts (and keeps updated) a sticky comment on the pull request with download links for each platform, so reviewers can install and test the proposed change without checking out the branch locally. The comment is refreshed automatically every time a new commit is pushed to the PR.
+
 ---
 
 ## Development
