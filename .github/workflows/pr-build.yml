@@ -1,0 +1,132 @@
+name: PR Build
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform_slug }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_extension: deb
+            platform_slug: linux-amd64
+            executable_name: memory-mapper
+            deb_arch: amd64
+          - os: ubuntu-24.04-arm
+            artifact_extension: deb
+            platform_slug: linux-arm64-raspberry-pi
+            executable_name: memory-mapper
+            deb_arch: arm64
+          - os: macos-latest
+            artifact_extension: ""
+            platform_slug: macos
+            executable_name: memory-mapper-macos
+          - os: windows-latest
+            artifact_extension: exe
+            platform_slug: windows
+            executable_name: memory-mapper-windows
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pyinstaller
+
+      - name: Build standalone executable
+        run: |
+          pyinstaller --onefile --name "${{ matrix.executable_name }}" memory_mapper/__main__.py
+
+      - name: Compute artifact filename
+        id: artifact_file
+        shell: bash
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          PACKAGE_VERSION="0.0.0-pr${{ github.event.pull_request.number }}-${SHORT_SHA}"
+          ARTIFACT_BASENAME="warped-pinball-memory-mapper-${{ matrix.platform_slug }}-${PACKAGE_VERSION}"
+          if [ -n "${{ matrix.artifact_extension }}" ]; then
+            ARTIFACT_FILENAME="${ARTIFACT_BASENAME}.${{ matrix.artifact_extension }}"
+          else
+            ARTIFACT_FILENAME="${ARTIFACT_BASENAME}"
+          fi
+          echo "artifact_basename=${ARTIFACT_BASENAME}" >> "${GITHUB_OUTPUT}"
+          echo "artifact_filename=${ARTIFACT_FILENAME}" >> "${GITHUB_OUTPUT}"
+          echo "package_version=${PACKAGE_VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build Linux .deb package
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p pkg/DEBIAN pkg/usr/local/bin
+          {
+            echo "Package: memory-mapper"
+            echo "Version: ${{ steps.artifact_file.outputs.package_version }}"
+            echo "Section: utils"
+            echo "Priority: optional"
+            echo "Architecture: ${{ matrix.deb_arch }}"
+            echo "Maintainer: Memory Mapper Maintainers"
+            echo "Description: UDP multicast memory snapshot viewer (PR build)"
+            echo " Standalone CLI tool that displays byte-level memory updates in the terminal."
+          } > pkg/DEBIAN/control
+
+          cp dist/${{ matrix.executable_name }} pkg/usr/local/bin/memory-mapper
+          chmod 0755 pkg/usr/local/bin/memory-mapper
+
+          dpkg-deb --build pkg "dist/${{ steps.artifact_file.outputs.artifact_filename }}"
+
+      - name: Rename non-Linux artifacts
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            mv "dist/${{ matrix.executable_name }}.exe" "dist/${{ steps.artifact_file.outputs.artifact_filename }}"
+          else
+            mv "dist/${{ matrix.executable_name }}" "dist/${{ steps.artifact_file.outputs.artifact_filename }}"
+          fi
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact_file.outputs.artifact_basename }}
+          path: dist/${{ steps.artifact_file.outputs.artifact_filename }}
+          if-no-files-found: error
+          retention-days: 14
+
+  pr-info:
+    name: Save PR metadata
+    runs-on: ubuntu-latest
+    needs: build
+    if: always() && !cancelled()
+    steps:
+      - name: Write PR metadata
+        shell: bash
+        run: |
+          mkdir -p pr-info
+          echo "${{ github.event.pull_request.number }}" > pr-info/number
+          echo "${{ github.event.pull_request.head.sha }}" > pr-info/sha
+          echo "${{ needs.build.result }}" > pr-info/build-result
+
+      - name: Upload PR metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-info
+          path: pr-info/
+          retention-days: 14
