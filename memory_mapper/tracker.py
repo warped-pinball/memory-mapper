@@ -286,9 +286,9 @@ class MemoryTracker:
             misses = total - hits
             if misses == 0 and total > 0:
                 hard += 1
-            elif misses == 1:
+            elif misses == 1 and hits > 0:
                 soft1 += 1
-            elif misses == 2:
+            elif misses == 2 and hits > 0:
                 soft2 += 1
         return ScanStats(
             steps=len(self.bit_scan_steps),
@@ -308,9 +308,9 @@ class MemoryTracker:
         misses = total - hits
         if misses == 0:
             return 3
-        if misses == 1:
+        if misses == 1 and hits > 0:
             return 2
-        if misses == 2:
+        if misses == 2 and hits > 0:
             return 1
         return 0
 
@@ -320,7 +320,7 @@ class MemoryTracker:
         for flat, total in self.bit_scan_total.items():
             hits = self.bit_scan_hits.get(flat, 0)
             misses = total - hits
-            if misses <= 2 and total > 0:
+            if misses <= 2 and hits > 0:
                 matching.add(flat // 8)
         return sorted(matching)
 
@@ -340,9 +340,9 @@ class MemoryTracker:
             misses = total - hits
             if misses == 0 and total > 0:
                 hard += 1
-            elif misses == 1:
+            elif misses == 1 and hits > 0:
                 soft1 += 1
-            elif misses == 2:
+            elif misses == 2 and hits > 0:
                 soft2 += 1
 
         return ScanStats(
@@ -362,9 +362,9 @@ class MemoryTracker:
         misses = total - hits
         if misses == 0:
             return 3
-        if misses == 1:
+        if misses == 1 and hits > 0:
             return 2
-        if misses == 2:
+        if misses == 2 and hits > 0:
             return 1
         return 0
 
