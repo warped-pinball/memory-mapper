@@ -40,7 +40,7 @@ SOFT_MATCH_2_STYLE = Style(bgcolor="magenta", color="white", bold=True)
 HEADER_STYLE = Style(color="bright_cyan", bold=True)
 DIM_STYLE = Style(color="grey50")
 CURSOR_STYLE = Style(bgcolor="white", color="black", bold=True)
-MARKED_STYLE = Style(bgcolor="bright_red", color="white", bold=True)
+MARK_INDICATOR_STYLE = Style(color="bright_red", bold=True)
 
 BYTES_PER_ROW = 16
 
@@ -126,7 +126,9 @@ def _render_legend() -> Panel:
     legend.append("  Soft match (2 misses) ", style=SOFT_MATCH_2_STYLE)
     legend.append("  Recently changed ", style=CHANGED_STYLE)
     legend.append("  Cursor ", style=CURSOR_STYLE)
-    legend.append("  Marked ", style=MARKED_STYLE)
+    legend.append("  ")
+    legend.append(">", style=MARK_INDICATOR_STYLE)
+    legend.append(" Marked")
     return Panel(legend, border_style="bright_black", title="[bold]Legend[/bold]")
 
 
@@ -138,8 +140,6 @@ def _byte_style(
 ):
     if cursor_pos is not None and index == cursor_pos:
         return CURSOR_STYLE
-    if index in tracker.marked_addresses:
-        return MARKED_STYLE
     if bit_mode:
         # Use the best (highest) match level across the 8 bits of this byte.
         match_level = 0
@@ -193,7 +193,7 @@ def _render_cursor_info(
 
     value = snapshot[cursor_pos]
     is_marked = cursor_pos in tracker.marked_addresses
-    mark_label = " [bright_red]★ MARKED[/bright_red]" if is_marked else ""
+    mark_label = " [bright_red bold]> MARKED[/bright_red bold]" if is_marked else ""
     ascii_ch = chr(value) if ASCII_PRINTABLE_START <= value < ASCII_PRINTABLE_END else "·"
 
     info_line = Text.from_markup(
@@ -277,17 +277,22 @@ def render_snapshot(
         line = Text("\n")
         line.append(f"{row_start:04X}", style="bright_cyan")
         for col, byte_val in enumerate(row_bytes):
-            line.append(" ")
+            addr = row_start + col
+            is_marked = addr in tracker.marked_addresses
+            if is_marked:
+                line.append(">", style=MARK_INDICATOR_STYLE)
+            else:
+                line.append(" ")
             if ascii_mode:
                 ch = chr(byte_val) if ASCII_PRINTABLE_START <= byte_val < ASCII_PRINTABLE_END else "·"
                 line.append(
                     f" {ch}",
-                    style=_byte_style(tracker, row_start + col, cursor_pos, bit_mode=bit_mode),
+                    style=_byte_style(tracker, addr, cursor_pos, bit_mode=bit_mode),
                 )
             else:
                 line.append(
                     f"{byte_val:02X}",
-                    style=_byte_style(tracker, row_start + col, cursor_pos, bit_mode=bit_mode),
+                    style=_byte_style(tracker, addr, cursor_pos, bit_mode=bit_mode),
                 )
         memory_text.append(line)
 
