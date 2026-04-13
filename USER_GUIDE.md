@@ -203,7 +203,7 @@ the other.
 - **Magenta** — soft match: missed **two** steps.
 - **Yellow** — the byte changed within the last `highlight-duration` seconds.
 - **White** — the cursor.
-- **Red** — a marked address.
+- **`>`** — a red `>` to the left of the value indicates a marked address.
 
 ---
 
