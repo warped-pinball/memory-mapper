@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "memory-mapper"
-version = "0.1.0"
+version = "1.2.0"
 description = "CLI tool to receive UDP multicast memory snapshots and display them in the terminal"
 readme = "README.md"
 requires-python = ">=3.8"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 dependencies = [
     "rich>=13.0.0",
 ]
