@@ -125,12 +125,26 @@ usage: memory-mapper [-h] [--version] [--group GROUP] [--port PORT]
 | Key       | Action                                         |
 |-----------|------------------------------------------------|
 | `← ↑ ↓ →` | Move the cursor                                |
+| Mouse click | Move the cursor to the clicked byte          |
 | `Space`   | Mark (or unmark) the byte under the cursor     |
 | `1`–`9`   | Switch to source 1–9 (resets tracker state)    |
 | `T`       | Toggle ASCII view on the hex dump              |
 | `B`       | Toggle between BYTE mode and BIT mode          |
 | `+` / `-` | Increase / decrease the change-highlight time  |
 | `Q`       | Quit                                           |
+
+### View toggles
+
+When the memory map is large, screen space gets tight. Each part of the UI can
+be hidden independently so the hex dump gets as much room as possible:
+
+| Key | Action                                                              |
+|-----|---------------------------------------------------------------------|
+| `M` | Toggle the menu panel (replaced by a one-line status bar when hidden) |
+| `K` | Toggle the legend panel                                             |
+| `O` | Toggle the offset column and column-header row                      |
+| `U` | Toggle the cursor info panel                                        |
+| `V` | Toggle compact view (removes panel borders and padding)             |
 
 ### Exporting
 
