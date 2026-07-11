@@ -63,10 +63,15 @@ every time a new commit is pushed to the PR.
 
 ## Versioning
 
-The version is declared in two places that must stay in sync:
+The version is declared in exactly one place — `memory_mapper/__init__.py`
+(`__version__`). `pyproject.toml` reads it dynamically
+(`[tool.setuptools.dynamic]`), so the two can never drift.
 
-- `pyproject.toml` → `project.version`
-- `memory_mapper/__init__.py` → `__version__`
+To cut a release:
 
-Bump both, then create a matching `v<version>` tag / GitHub Release to cut a
-build.
+1. Bump `__version__` in `memory_mapper/__init__.py`.
+2. Create a matching `v<version>` tag / GitHub Release.
+
+The [Version Check](.github/workflows/version-check.yml) workflow fails the
+release if the tag doesn't match `__version__`, so a mismatch can't ship. It
+also runs on pull requests that touch the version so drift is caught early.

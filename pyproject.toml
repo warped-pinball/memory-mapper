@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "memory-mapper"
-version = "1.2.0"
+# Single source of truth: memory_mapper/__init__.py __version__ (see [tool.setuptools.dynamic]).
+dynamic = ["version"]
 description = "CLI tool to receive UDP multicast memory snapshots and display them in the terminal"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -21,6 +22,9 @@ dev = [
     "pytest>=7.0",
     "pytest-timeout>=2.0",
 ]
+
+[tool.setuptools.dynamic]
+version = { attr = "memory_mapper.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["."]
