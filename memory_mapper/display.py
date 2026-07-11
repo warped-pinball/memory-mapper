@@ -18,7 +18,7 @@ try:
     import msvcrt
 except ImportError:  # pragma: no cover - non-Windows fallback
     msvcrt = None
-from typing import Optional
+from typing import List, Optional, Tuple, Union
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -47,11 +47,24 @@ BYTES_PER_ROW = 16
 ASCII_PRINTABLE_START = 32
 ASCII_PRINTABLE_END = 127
 
+# Enable/disable SGR mouse reporting (button presses only).
+MOUSE_ENABLE = "\x1b[?1000h\x1b[?1006h"
+MOUSE_DISABLE = "\x1b[?1006l\x1b[?1000l"
 
-def _auto_bytes_per_row(terminal_width: Optional[int], preferred: int) -> int:
+# How often (seconds) the display re-renders when there is no user input.
+DATA_REFRESH_INTERVAL = 0.25
+# How often (seconds) the loop polls for keyboard/mouse input.
+INPUT_POLL_INTERVAL = 0.02
+
+
+def _auto_bytes_per_row(
+    terminal_width: Optional[int],
+    preferred: int,
+    overhead: int = 14,
+) -> int:
     if terminal_width is None:
         return max(4, preferred)
-    estimated = max(4, (terminal_width - 14) // 3)
+    estimated = max(4, (terminal_width - overhead) // 3)
     aligned = max(4, estimated - (estimated % 4))
     return max(4, max(preferred, aligned))
 
@@ -62,7 +75,8 @@ def _render_menu(
     status_message: str,
     ascii_mode: bool = False,
     bit_mode: bool = False,
-) -> Panel:
+    compact: bool = False,
+):
     senders = tracker.known_senders()
     stats = tracker.bit_scan_stats() if bit_mode else tracker.scan_stats()
 
@@ -98,11 +112,15 @@ def _render_menu(
             "[cyan]R[/cyan] reset scan"
         )
     nav_commands = (
-        "[bold]Nav:[/bold] [cyan]←↑↓→[/cyan] move cursor  [cyan]Space[/cyan] mark  "
+        "[bold]Nav:[/bold] [cyan]←↑↓→[/cyan]/click move cursor  [cyan]Space[/cyan] mark  "
         "[cyan]E[/cyan] export marked  [cyan]X[/cyan] export all  [cyan]T[/cyan] ASCII "
         + ("[bright_green]ON[/bright_green]" if ascii_mode else "off")
         + f"  [cyan]B[/cyan] mode:{mode_label}"
         + "  [cyan]+/-[/cyan] highlight time  [cyan]Q[/cyan] quit"
+    )
+    view_commands = (
+        "[bold]View:[/bold] [cyan]M[/cyan] menu  [cyan]K[/cyan] legend  "
+        "[cyan]O[/cyan] offsets  [cyan]U[/cyan] cursor info  [cyan]V[/cyan] compact"
     )
 
     metrics = (
@@ -115,11 +133,14 @@ def _render_menu(
     menu.add_row(" ".join(sender_bits), metrics)
     menu.add_row(scan_commands, "")
     menu.add_row(nav_commands, "")
+    menu.add_row(view_commands, "")
     menu.add_row(f"[bold]Status:[/bold] {status_message}", "")
+    if compact:
+        return menu
     return Panel(menu, border_style="bright_black", padding=(0, 1), title="[bold]Menu[/bold]")
 
 
-def _render_legend() -> Panel:
+def _render_legend(compact: bool = False):
     legend = Text()
     legend.append("Hard match ", style=HARD_MATCH_STYLE)
     legend.append("  Soft match (1 miss) ", style=SOFT_MATCH_1_STYLE)
@@ -129,7 +150,17 @@ def _render_legend() -> Panel:
     legend.append("  ")
     legend.append(">", style=MARK_INDICATOR_STYLE)
     legend.append(" Marked")
+    if compact:
+        return legend
     return Panel(legend, border_style="bright_black", title="[bold]Legend[/bold]")
+
+
+def _render_status_bar(status_message: str) -> Text:
+    """One-line replacement shown when the full menu is hidden."""
+    return Text.from_markup(
+        "[cyan]M[/cyan] menu  [cyan]Q[/cyan] quit  [bold]Status:[/bold] "
+        + status_message
+    )
 
 
 def _byte_style(
@@ -180,12 +211,16 @@ def _render_cursor_info(
     tracker: MemoryTracker,
     cursor_pos: int,
     bit_mode: bool = False,
-) -> Panel:
+    compact: bool = False,
+):
     """Render the info panel showing current cursor address details and value history."""
     snapshot = tracker.snapshot
     if snapshot is None or not (0 <= cursor_pos < len(snapshot)):
+        body = Text("No data at cursor position", style="dim")
+        if compact:
+            return body
         return Panel(
-            "[dim]No data at cursor position[/dim]",
+            body,
             border_style="bright_black",
             padding=(0, 1),
             title="[bold]Cursor[/bold]",
@@ -224,8 +259,11 @@ def _render_cursor_info(
         history_markup += "  ".join(hist_parts)
         parts.append(Text.from_markup(history_markup))
 
+    body = Group(*parts)
+    if compact:
+        return body
     return Panel(
-        Group(*parts),
+        body,
         border_style="bright_black",
         padding=(0, 1),
         title="[bold]Cursor[/bold]",
@@ -241,12 +279,13 @@ def render_snapshot(
     cursor_pos: Optional[int] = None,
     ascii_mode: bool = False,
     bit_mode: bool = False,
+    show_offsets: bool = True,
+    show_legend: bool = True,
+    show_menu: bool = True,
+    show_cursor_info: bool = True,
+    compact: bool = False,
 ):
     snapshot = tracker.snapshot
-    menu_panel = _render_menu(
-        tracker, selected_source, status_message,
-        ascii_mode=ascii_mode, bit_mode=bit_mode,
-    )
 
     title = (
         "[bold bright_blue]Memory Mapper"
@@ -257,25 +296,45 @@ def render_snapshot(
     if snapshot is None:
         body = Text("Waiting for data…", style=DIM_STYLE, justify="center")
         memory_panel = Panel(body, title=title, border_style="bright_blue")
-        return Group(memory_panel, _render_legend(), menu_panel)
+        parts: list = [memory_panel]
+        if show_legend:
+            parts.append(_render_legend(compact=compact))
+        if show_menu:
+            parts.append(
+                _render_menu(
+                    tracker, selected_source, status_message,
+                    ascii_mode=ascii_mode, bit_mode=bit_mode, compact=compact,
+                )
+            )
+        else:
+            parts.append(_render_status_bar(status_message))
+        return Group(*parts)
 
     tracker.cleanup_old_changes()
 
-    effective_bpr = _auto_bytes_per_row(terminal_width, bytes_per_row)
+    overhead = _layout_overhead(show_offsets=show_offsets, compact=compact)
+    effective_bpr = _auto_bytes_per_row(terminal_width, bytes_per_row, overhead)
     size = len(snapshot)
 
     memory_text = Text()
-    # Header: "Off " is 4 chars to align with 4-char row offsets like "0000"
-    header = Text(" Off", style="bright_cyan")
-    for col in range(effective_bpr):
-        header.append(" ")
-        header.append(f"{col:02X}", style=HEADER_STYLE)
-    memory_text.append(header)
+    if show_offsets:
+        # Header: "Off " is 4 chars to align with 4-char row offsets like "0000"
+        header = Text(" Off", style="bright_cyan")
+        for col in range(effective_bpr):
+            header.append(" ")
+            header.append(f"{col:02X}", style=HEADER_STYLE)
+        memory_text.append(header)
 
+    first_row = True
     for row_start in range(0, size, effective_bpr):
         row_bytes = snapshot[row_start : row_start + effective_bpr]
-        line = Text("\n")
-        line.append(f"{row_start:04X}", style="bright_cyan")
+        if show_offsets or not first_row:
+            line = Text("\n")
+        else:
+            line = Text()
+        first_row = False
+        if show_offsets:
+            line.append(f"{row_start:04X}", style="bright_cyan")
         for col, byte_val in enumerate(row_bytes):
             addr = row_start + col
             is_marked = addr in tracker.marked_addresses
@@ -304,20 +363,44 @@ def render_snapshot(
         f"[dim]Marked[/dim] [bold]{marked_count}[/bold]"
     )
 
-    memory_panel = Panel(
-        memory_text,
-        title=title,
-        subtitle=status,
-        border_style="bright_blue",
-        expand=True,
-    )
+    if compact:
+        memory_renderable: Union[Text, Panel] = memory_text
+    else:
+        memory_renderable = Panel(
+            memory_text,
+            title=title,
+            subtitle=status,
+            border_style="bright_blue",
+            expand=True,
+        )
 
-    panels = [memory_panel]
-    if cursor_pos is not None:
-        panels.append(_render_cursor_info(tracker, cursor_pos, bit_mode=bit_mode))
-    panels.append(_render_legend())
-    panels.append(menu_panel)
+    panels: list = [memory_renderable]
+    if show_cursor_info and cursor_pos is not None:
+        panels.append(
+            _render_cursor_info(tracker, cursor_pos, bit_mode=bit_mode, compact=compact)
+        )
+    if show_legend:
+        panels.append(_render_legend(compact=compact))
+    if show_menu:
+        panels.append(
+            _render_menu(
+                tracker, selected_source, status_message,
+                ascii_mode=ascii_mode, bit_mode=bit_mode, compact=compact,
+            )
+        )
+    else:
+        panels.append(_render_status_bar(status_message))
     return Group(*panels)
+
+
+def _layout_overhead(show_offsets: bool, compact: bool) -> int:
+    """Horizontal characters consumed by borders/padding/offset column."""
+    overhead = 0
+    if not compact:
+        overhead += 4  # panel borders + padding on both sides
+    if show_offsets:
+        overhead += 4  # "0000" row-offset column
+    return max(overhead, 2)
 
 
 class MemoryDisplay:
@@ -339,54 +422,153 @@ class MemoryDisplay:
         self.cursor_pos: int = 0
         self.ascii_mode: bool = False
         self.bit_mode: bool = False
+        self.show_offsets: bool = True
+        self.show_legend: bool = True
+        self.show_menu: bool = True
+        self.show_cursor_info: bool = True
+        self.compact: bool = False
         self._effective_bpr: int = bytes_per_row
 
     def _capture_keypress(self) -> Optional[str]:
+        """Read a single pending key event (legacy single-event reader)."""
+        events = self._poll_events(0)
+        for event in events:
+            if event[0] == "KEY":
+                return event[1]
+        return None
+
+    def _poll_events(self, timeout: float) -> List[Tuple]:
+        """Return pending input events as ("KEY", key) or ("MOUSE", x, y) tuples.
+
+        Waits up to *timeout* seconds for the first byte, then drains
+        everything that is immediately available so held-down keys don't
+        queue up behind renders.
+        """
         if not sys.stdin.isatty():
-            return None
+            if timeout:
+                time.sleep(timeout)
+            return []
         if msvcrt is not None:
-            if not msvcrt.kbhit():
-                return None
-            ch = msvcrt.getwch()
-            if ch in ("\x00", "\xe0"):
-                ch2 = msvcrt.getwch()
-                arrow_map = {"H": "UP", "P": "DOWN", "K": "LEFT", "M": "RIGHT"}
-                return arrow_map.get(ch2, ch2)
-            return ch
+            deadline = time.monotonic() + timeout
+            while not msvcrt.kbhit():
+                if time.monotonic() >= deadline:
+                    return []
+                time.sleep(0.005)
+            events: List[Tuple] = []
+            while msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                if ch in ("\x00", "\xe0"):
+                    ch2 = msvcrt.getwch()
+                    arrow_map = {"H": "UP", "P": "DOWN", "K": "LEFT", "M": "RIGHT"}
+                    events.append(("KEY", arrow_map.get(ch2, ch2)))
+                else:
+                    events.append(("KEY", ch))
+            return events
+
         fd = sys.stdin.fileno()
         try:
-            readable, _, _ = select.select([fd], [], [], 0)
+            readable, _, _ = select.select([fd], [], [], timeout)
         except (OSError, ValueError):
-            return None
+            return []
         if not readable:
-            return None
-        try:
-            ch = os.read(fd, 1).decode("utf-8", errors="replace")
-        except OSError:
-            return None
-        if ch == "\x1b":
+            return []
+
+        data = b""
+        while True:
             try:
-                readable2, _, _ = select.select([fd], [], [], 0.05)
+                chunk = os.read(fd, 256)
+            except OSError:
+                break
+            if not chunk:
+                break
+            data += chunk
+            try:
+                more, _, _ = select.select([fd], [], [], 0)
             except (OSError, ValueError):
-                return ch
-            if readable2:
+                break
+            if not more:
+                break
+        return self._parse_input(data.decode("utf-8", errors="replace"), fd)
+
+    def _parse_input(self, buf: str, fd: Optional[int]) -> List[Tuple]:
+        events: List[Tuple] = []
+        i = 0
+        n = len(buf)
+        arrow_map = {"A": "UP", "B": "DOWN", "C": "RIGHT", "D": "LEFT"}
+        while i < n:
+            ch = buf[i]
+            if ch != "\x1b":
+                events.append(("KEY", ch))
+                i += 1
+                continue
+            # Escape sequence. A bare trailing ESC may be a partial sequence;
+            # give the terminal a moment to deliver the rest.
+            if i + 1 >= n and fd is not None:
                 try:
-                    ch2 = os.read(fd, 1).decode("utf-8", errors="replace")
-                except OSError:
-                    return ch
-                if ch2 == "[":
+                    readable, _, _ = select.select([fd], [], [], 0.02)
+                    if readable:
+                        buf += os.read(fd, 64).decode("utf-8", errors="replace")
+                        n = len(buf)
+                except (OSError, ValueError):
+                    pass
+            if i + 1 >= n or buf[i + 1] != "[":
+                events.append(("KEY", ch))
+                i += 1
+                continue
+            j = i + 2
+            if j < n and buf[j] == "<":
+                # SGR mouse event: ESC [ < btn ; x ; y (M|m)
+                k = j + 1
+                while k < n and buf[k] not in ("M", "m"):
+                    k += 1
+                if k < n:
                     try:
-                        readable3, _, _ = select.select([fd], [], [], 0.05)
-                    except (OSError, ValueError):
-                        return ch
-                    if readable3:
-                        try:
-                            ch3 = os.read(fd, 1).decode("utf-8", errors="replace")
-                        except OSError:
-                            return ch
-                        arrow_map = {"A": "UP", "B": "DOWN", "C": "RIGHT", "D": "LEFT"}
-                        return arrow_map.get(ch3, ch3)
-        return ch
+                        btn_s, x_s, y_s = buf[j + 1 : k].split(";")
+                        if buf[k] == "M" and int(btn_s) in (0, 1, 2):
+                            events.append(("MOUSE", int(x_s), int(y_s)))
+                    except ValueError:
+                        pass
+                    i = k + 1
+                    continue
+                i = n
+                continue
+            if j < n and buf[j] in arrow_map:
+                events.append(("KEY", arrow_map[buf[j]]))
+                i = j + 1
+                continue
+            # Unknown CSI sequence: skip to its final byte (0x40-0x7E).
+            k = j
+            while k < n and not ("\x40" <= buf[k] <= "\x7e"):
+                k += 1
+            i = min(k + 1, n)
+        return events
+
+    def _handle_mouse(self, x: int, y: int) -> None:
+        """Move the cursor to the memory byte under a mouse click, if any."""
+        snapshot = self.tracker.snapshot
+        if not snapshot:
+            return
+        bpr = self._effective_bpr
+        # Rows: panel top border (unless compact), then optional header line,
+        # then one line per memory row.
+        content_top = 1 if self.compact else 2
+        row = y - content_top - (1 if self.show_offsets else 0)
+        if row < 0:
+            return
+        # Columns: panel border + padding (unless compact), then the 4-char
+        # row-offset column, then 3 characters per byte (mark spacer + 2).
+        left_pad = 0 if self.compact else 2
+        rel = x - 1 - left_pad - (4 if self.show_offsets else 0)
+        if rel < 0:
+            return
+        col = rel // 3
+        if col >= bpr:
+            return
+        addr = row * bpr + col
+        if addr >= len(snapshot):
+            return
+        self.cursor_pos = addr
+        self.status_message = f"Cursor moved to 0x{addr:04X}"
 
     def _handle_input(self, key: str, stop_event) -> None:
         if not key:
@@ -418,6 +600,28 @@ class MemoryDisplay:
         if k == "b":
             self.bit_mode = not self.bit_mode
             self.status_message = f"Bit mode {'enabled' if self.bit_mode else 'disabled'}"
+            return
+        if k == "m":
+            self.show_menu = not self.show_menu
+            self.status_message = f"Menu {'shown' if self.show_menu else 'hidden'}"
+            return
+        if k == "k":
+            self.show_legend = not self.show_legend
+            self.status_message = f"Legend {'shown' if self.show_legend else 'hidden'}"
+            return
+        if k == "o":
+            self.show_offsets = not self.show_offsets
+            self.status_message = f"Offsets {'shown' if self.show_offsets else 'hidden'}"
+            return
+        if k == "u":
+            self.show_cursor_info = not self.show_cursor_info
+            self.status_message = (
+                f"Cursor info {'shown' if self.show_cursor_info else 'hidden'}"
+            )
+            return
+        if k == "v":
+            self.compact = not self.compact
+            self.status_message = f"Compact view {'enabled' if self.compact else 'disabled'}"
             return
         if k in ("+", "="):
             new_val = min(
@@ -536,56 +740,82 @@ class MemoryDisplay:
         else:
             self.status_message = f"Source {source_number} is unavailable"
 
+    def _render(self):
+        return render_snapshot(
+            self.tracker,
+            self.bytes_per_row,
+            terminal_width=self._console.size.width,
+            selected_source=self.selected_source,
+            status_message=self.status_message,
+            cursor_pos=self.cursor_pos,
+            ascii_mode=self.ascii_mode,
+            bit_mode=self.bit_mode,
+            show_offsets=self.show_offsets,
+            show_legend=self.show_legend,
+            show_menu=self.show_menu,
+            show_cursor_info=self.show_cursor_info,
+            compact=self.compact,
+        )
+
+    def _update_effective_bpr(self) -> None:
+        self._effective_bpr = _auto_bytes_per_row(
+            self._console.size.width,
+            self.bytes_per_row,
+            _layout_overhead(show_offsets=self.show_offsets, compact=self.compact),
+        )
+
     def run(self, stop_event=None) -> None:
         can_raw_mode = sys.stdin.isatty() and termios is not None and tty is not None
         stdin_fd = sys.stdin.fileno() if can_raw_mode else None
         old_settings = termios.tcgetattr(stdin_fd) if stdin_fd is not None else None
         if stdin_fd is not None:
             tty.setcbreak(stdin_fd)
+            sys.stdout.write(MOUSE_ENABLE)
+            sys.stdout.flush()
 
         try:
-            self._effective_bpr = _auto_bytes_per_row(
-                self._console.size.width, self.bytes_per_row
-            )
+            self._update_effective_bpr()
             with Live(
-                render_snapshot(
-                    self.tracker,
-                    self.bytes_per_row,
-                    terminal_width=self._console.size.width,
-                    selected_source=self.selected_source,
-                    status_message=self.status_message,
-                    cursor_pos=self.cursor_pos,
-                    ascii_mode=self.ascii_mode,
-                    bit_mode=self.bit_mode,
-                ),
+                self._render(),
                 console=self._console,
-                refresh_per_second=self.refresh_per_second,
+                auto_refresh=False,
                 screen=True,
             ) as live:
                 try:
-                    interval = 1.0 / self.refresh_per_second
+                    data_interval = min(DATA_REFRESH_INTERVAL, 1.0 / self.refresh_per_second)
+                    last_render = time.monotonic()
+                    last_packet_count = self.tracker.packet_count
                     while stop_event is None or not stop_event.is_set():
-                        time.sleep(interval)
-                        key = self._capture_keypress()
-                        if key:
-                            self._handle_input(key, stop_event)
-                        self._effective_bpr = _auto_bytes_per_row(
-                            self._console.size.width, self.bytes_per_row
-                        )
-                        live.update(
-                            render_snapshot(
-                                self.tracker,
-                                self.bytes_per_row,
-                                terminal_width=self._console.size.width,
-                                selected_source=self.selected_source,
-                                status_message=self.status_message,
-                                cursor_pos=self.cursor_pos,
-                                ascii_mode=self.ascii_mode,
-                                bit_mode=self.bit_mode,
-                            )
-                        )
+                        events = self._poll_events(INPUT_POLL_INTERVAL)
+                        dirty = False
+                        for event in events:
+                            if event[0] == "KEY":
+                                self._handle_input(event[1], stop_event)
+                            elif event[0] == "MOUSE":
+                                self._handle_mouse(event[1], event[2])
+                            dirty = True
+                        if stop_event is not None and stop_event.is_set():
+                            break
+
+                        now = time.monotonic()
+                        data_due = now - last_render >= data_interval
+                        if not (dirty or data_due):
+                            continue
+                        if not dirty and self.tracker.packet_count == last_packet_count:
+                            # No input and no new packets: only re-render if
+                            # change highlights may still be fading.
+                            if not self.tracker.change_times:
+                                last_render = now
+                                continue
+                        self._update_effective_bpr()
+                        live.update(self._render(), refresh=True)
+                        last_render = time.monotonic()
+                        last_packet_count = self.tracker.packet_count
                 except KeyboardInterrupt:
                     pass
         finally:
+            if stdin_fd is not None:
+                sys.stdout.write(MOUSE_DISABLE)
+                sys.stdout.flush()
             if stdin_fd is not None and old_settings is not None:
                 termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
