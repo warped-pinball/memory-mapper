@@ -75,11 +75,10 @@ jobs:
                 a.name.includes(`-${slug}-`),
               );
               if (!match) {
-                return `| ${label} | _unavailable_ | _unavailable_ |`;
+                return `| ${label} | _unavailable_ |`;
               }
               const ghUrl = `https://github.com/${owner}/${repo}/actions/runs/${runId}/artifacts/${match.id}`;
-              const nlUrl = `https://nightly.link/${owner}/${repo}/actions/artifacts/${match.id}.zip`;
-              return `| ${label} | [GitHub (sign-in)](${ghUrl}) | [nightly.link](${nlUrl}) |`;
+              return `| ${label} | [Download](${ghUrl}) |`;
             });
 
             const overallSucceeded = buildResult === 'success';
@@ -95,13 +94,11 @@ jobs:
               `Built from commit \`${headSha.substring(0, 7)}\` · ` +
                 `[workflow run](https://github.com/${owner}/${repo}/actions/runs/${runId})`,
               '',
-              '| Platform | Download (signed-in) | Download (no sign-in) |',
-              '| --- | --- | --- |',
+              '| Platform | Download |',
+              '| --- | --- |',
               ...rows,
               '',
               '> Each download is a `.zip` containing the platform installer; unzip it before installing.',
-              '> "Signed-in" links go to the GitHub Actions artifact page and require a GitHub account with read access to this repo.',
-              '> "No sign-in" links are served by [nightly.link](https://nightly.link/) and do not require authentication (public repositories only).',
               '> This comment is updated automatically every time the PR receives a new commit.',
             ].join('\n');
 
