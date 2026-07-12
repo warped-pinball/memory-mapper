@@ -47,13 +47,9 @@ BYTES_PER_ROW = 16
 ASCII_PRINTABLE_START = 32
 ASCII_PRINTABLE_END = 127
 
-# Enable/disable SGR mouse reporting (button presses only).
-MOUSE_ENABLE = "\x1b[?1000h\x1b[?1006h"
-MOUSE_DISABLE = "\x1b[?1006l\x1b[?1000l"
-
 # How often (seconds) the display re-renders when there is no user input.
 DATA_REFRESH_INTERVAL = 0.25
-# How often (seconds) the loop polls for keyboard/mouse input.
+# How often (seconds) the loop polls for keyboard input.
 INPUT_POLL_INTERVAL = 0.02
 
 
@@ -112,7 +108,7 @@ def _render_menu(
             "[cyan]R[/cyan] reset scan"
         )
     nav_commands = (
-        "[bold]Nav:[/bold] [cyan]←↑↓→[/cyan]/click move cursor  [cyan]Space[/cyan] mark  "
+        "[bold]Nav:[/bold] [cyan]←↑↓→[/cyan] move cursor  [cyan]Space[/cyan] mark  "
         "[cyan]E[/cyan] export marked  [cyan]X[/cyan] export all  [cyan]T[/cyan] ASCII "
         + ("[bright_green]ON[/bright_green]" if ascii_mode else "off")
         + f"  [cyan]B[/cyan] mode:{mode_label}"
@@ -438,7 +434,7 @@ class MemoryDisplay:
         return None
 
     def _poll_events(self, timeout: float) -> List[Tuple]:
-        """Return pending input events as ("KEY", key) or ("MOUSE", x, y) tuples.
+        """Return pending input events as ("KEY", key) tuples.
 
         Waits up to *timeout* seconds for the first byte, then drains
         everything that is immediately available so held-down keys don't
@@ -516,22 +512,6 @@ class MemoryDisplay:
                 i += 1
                 continue
             j = i + 2
-            if j < n and buf[j] == "<":
-                # SGR mouse event: ESC [ < btn ; x ; y (M|m)
-                k = j + 1
-                while k < n and buf[k] not in ("M", "m"):
-                    k += 1
-                if k < n:
-                    try:
-                        btn_s, x_s, y_s = buf[j + 1 : k].split(";")
-                        if buf[k] == "M" and int(btn_s) in (0, 1, 2):
-                            events.append(("MOUSE", int(x_s), int(y_s)))
-                    except ValueError:
-                        pass
-                    i = k + 1
-                    continue
-                i = n
-                continue
             if j < n and buf[j] in arrow_map:
                 events.append(("KEY", arrow_map[buf[j]]))
                 i = j + 1
@@ -542,33 +522,6 @@ class MemoryDisplay:
                 k += 1
             i = min(k + 1, n)
         return events
-
-    def _handle_mouse(self, x: int, y: int) -> None:
-        """Move the cursor to the memory byte under a mouse click, if any."""
-        snapshot = self.tracker.snapshot
-        if not snapshot:
-            return
-        bpr = self._effective_bpr
-        # Rows: panel top border (unless compact), then optional header line,
-        # then one line per memory row.
-        content_top = 1 if self.compact else 2
-        row = y - content_top - (1 if self.show_offsets else 0)
-        if row < 0:
-            return
-        # Columns: panel border + padding (unless compact), then the 4-char
-        # row-offset column, then 3 characters per byte (mark spacer + 2).
-        left_pad = 0 if self.compact else 2
-        rel = x - 1 - left_pad - (4 if self.show_offsets else 0)
-        if rel < 0:
-            return
-        col = rel // 3
-        if col >= bpr:
-            return
-        addr = row * bpr + col
-        if addr >= len(snapshot):
-            return
-        self.cursor_pos = addr
-        self.status_message = f"Cursor moved to 0x{addr:04X}"
 
     def _handle_input(self, key: str, stop_event) -> None:
         if not key:
@@ -770,8 +723,6 @@ class MemoryDisplay:
         old_settings = termios.tcgetattr(stdin_fd) if stdin_fd is not None else None
         if stdin_fd is not None:
             tty.setcbreak(stdin_fd)
-            sys.stdout.write(MOUSE_ENABLE)
-            sys.stdout.flush()
 
         try:
             self._update_effective_bpr()
@@ -791,8 +742,6 @@ class MemoryDisplay:
                         for event in events:
                             if event[0] == "KEY":
                                 self._handle_input(event[1], stop_event)
-                            elif event[0] == "MOUSE":
-                                self._handle_mouse(event[1], event[2])
                             dirty = True
                         if stop_event is not None and stop_event.is_set():
                             break
@@ -814,8 +763,5 @@ class MemoryDisplay:
                 except KeyboardInterrupt:
                     pass
         finally:
-            if stdin_fd is not None:
-                sys.stdout.write(MOUSE_DISABLE)
-                sys.stdout.flush()
             if stdin_fd is not None and old_settings is not None:
                 termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)

@@ -125,7 +125,6 @@ usage: memory-mapper [-h] [--version] [--group GROUP] [--port PORT]
 | Key       | Action                                         |
 |-----------|------------------------------------------------|
 | `← ↑ ↓ →` | Move the cursor                                |
-| Mouse click | Move the cursor to the clicked byte          |
 | `Space`   | Mark (or unmark) the byte under the cursor     |
 | `1`–`9`   | Switch to source 1–9 (resets tracker state)    |
 | `T`       | Toggle ASCII view on the hex dump              |
