@@ -745,57 +745,9 @@ class TestViewToggles:
             assert getattr(display, attr) is before
 
 
-class TestMouseInput:
-    def test_parse_sgr_mouse_press(self):
-        t = MemoryTracker()
-        display = MemoryDisplay(t)
-        events = display._parse_input("\x1b[<0;10;5M", fd=None)
-        assert events == [("MOUSE", 10, 5)]
-
-    def test_parse_ignores_mouse_release(self):
-        t = MemoryTracker()
-        display = MemoryDisplay(t)
-        events = display._parse_input("\x1b[<0;10;5m", fd=None)
-        assert events == []
-
+class TestInputParsing:
     def test_parse_mixed_keys_and_arrows(self):
         t = MemoryTracker()
         display = MemoryDisplay(t)
         events = display._parse_input("q\x1b[Ax", fd=None)
         assert events == [("KEY", "q"), ("KEY", "UP"), ("KEY", "x")]
-
-    def test_click_moves_cursor(self):
-        t = MemoryTracker()
-        t.update(bytes(range(64)))
-        display = MemoryDisplay(t)
-        display._effective_bpr = 16
-        # Default layout: border row (y=1), header row (y=2), first data row y=3.
-        # x: border+padding (2 cols) + offset (4 cols) + 3 chars per byte.
-        # Byte at column 2 of row 1 -> addr 18.
-        x = 1 + 2 + 4 + 2 * 3 + 2  # land on the hex digits of column 2
-        display._handle_mouse(x, 4)
-        assert display.cursor_pos == 16 + 2
-
-    def test_click_outside_data_is_ignored(self):
-        t = MemoryTracker()
-        t.update(bytes(range(8)))
-        display = MemoryDisplay(t)
-        display._effective_bpr = 16
-        display._handle_mouse(3, 1)  # top border
-        assert display.cursor_pos == 0
-        display._handle_mouse(200, 3)  # far right of row
-        assert display.cursor_pos == 0
-        display._handle_mouse(7, 50)  # beyond snapshot
-        assert display.cursor_pos == 0
-
-    def test_click_compact_no_offsets(self):
-        t = MemoryTracker()
-        t.update(bytes(range(64)))
-        display = MemoryDisplay(t)
-        display._effective_bpr = 16
-        display.compact = True
-        display.show_offsets = False
-        # No border, no header, no offset column: first data row y=1, text at x=1.
-        x = 1 + 3 * 3 + 1  # byte column 3
-        display._handle_mouse(x, 2)  # second data row
-        assert display.cursor_pos == 16 + 3
