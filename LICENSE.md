@@ -2,7 +2,7 @@
 
 <https://polyformproject.org/licenses/shield/1.0.0>
 
-Required Notice: Copyright © 2026 Warped Pinball (https://github.com/warped-pinball)
+Required Notice: Copyright © 2026 Warped Pinball LLC (https://warpedpinball.com)
 
 ## Acceptance
 
