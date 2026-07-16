@@ -18,7 +18,7 @@ try:
     import msvcrt
 except ImportError:  # pragma: no cover - non-Windows fallback
     msvcrt = None
-from typing import List, Optional, Tuple, Union
+from typing import Callable, List, Optional, Sequence, Tuple, Union
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -47,10 +47,39 @@ BYTES_PER_ROW = 16
 ASCII_PRINTABLE_START = 32
 ASCII_PRINTABLE_END = 127
 
+WRITE_WARNING = (
+    "Caution, writing values to memory can have unexpected or harmful "
+    "effects, do so with caution."
+)
+
 # How often (seconds) the display re-renders when there is no user input.
 DATA_REFRESH_INTERVAL = 0.25
 # How often (seconds) the loop polls for keyboard input.
 INPUT_POLL_INTERVAL = 0.02
+
+
+def parse_write_values(text: str) -> List[int]:
+    """Parse user input into byte values.
+
+    Accepts whitespace-separated tokens, each decimal ("5") or 0x-prefixed
+    hex ("0x2F"). Raises ValueError for anything unparseable or out of the
+    0-255 byte range, and for empty input.
+    """
+    tokens = text.split()
+    if not tokens:
+        raise ValueError("no value entered")
+    values: List[int] = []
+    for token in tokens:
+        try:
+            value = int(token, 0)
+        except ValueError:
+            raise ValueError(
+                f"invalid value {token!r} (use decimal like 5 or hex like 0x2F)"
+            ) from None
+        if not (0 <= value <= 255):
+            raise ValueError(f"value {token!r} is outside the byte range 0-255")
+        values.append(value)
+    return values
 
 
 def _auto_bytes_per_row(
@@ -109,6 +138,7 @@ def _render_menu(
         )
     nav_commands = (
         "[bold]Nav:[/bold] [cyan]←↑↓→[/cyan] move cursor  [cyan]Space[/cyan] mark  "
+        "[cyan]W[/cyan] write  "
         "[cyan]E[/cyan] export marked  [cyan]X[/cyan] export all  [cyan]T[/cyan] ASCII "
         + ("[bright_green]ON[/bright_green]" if ascii_mode else "off")
         + f"  [cyan]B[/cyan] mode:{mode_label}"
@@ -408,11 +438,21 @@ class MemoryDisplay:
         bytes_per_row: int = BYTES_PER_ROW,
         refresh_per_second: float = 4.0,
         selected_source: Optional[str] = None,
+        writer: Optional[Callable[[int, Sequence[int]], None]] = None,
+        machine_label: Optional[str] = None,
     ) -> None:
         self.tracker = tracker
         self.bytes_per_row = bytes_per_row
         self.refresh_per_second = refresh_per_second
         self.selected_source = selected_source
+        self.writer = writer
+        self.machine_label = machine_label
+        # Write flow state: None (inactive), "value" (typing values), or
+        # "confirm" (waiting on the safety confirmation).
+        self.write_stage: Optional[str] = None
+        self.write_buffer: str = ""
+        self.write_addr: int = 0
+        self.write_values: List[int] = []
         self._console = Console()
         self.status_message = "Waiting for first snapshot"
         self.cursor_pos: int = 0
@@ -527,6 +567,10 @@ class MemoryDisplay:
         if not key:
             return
 
+        if self.write_stage is not None:
+            self._handle_write_key(key)
+            return
+
         if key in ("UP", "DOWN", "LEFT", "RIGHT"):
             self._move_cursor(key)
             return
@@ -545,6 +589,9 @@ class MemoryDisplay:
             return
         if k == "x":
             self._export_all()
+            return
+        if k == "w":
+            self._begin_write()
             return
         if k == "t":
             self.ascii_mode = not self.ascii_mode
@@ -621,6 +668,114 @@ class MemoryDisplay:
             else:
                 self.status_message = "Captured baseline; press scan option again after values change."
 
+    def _begin_write(self) -> None:
+        if self.writer is None:
+            self.status_message = (
+                "Writes unavailable: not connected to a Vector machine "
+                "(start without --listen-only and provide a password)"
+            )
+            return
+        snapshot = self.tracker.snapshot
+        if snapshot is None or not (0 <= self.cursor_pos < len(snapshot)):
+            self.status_message = "No data at cursor position"
+            return
+        self.write_stage = "value"
+        self.write_addr = self.cursor_pos
+        self.write_buffer = ""
+        self.write_values = []
+        self.status_message = f"Writing to 0x{self.write_addr:04X} — enter value(s)"
+
+    def _handle_write_key(self, key: str) -> None:
+        if key == "\x1b":  # ESC cancels at either stage
+            self._cancel_write()
+            return
+        if self.write_stage == "value":
+            if key in ("\r", "\n"):
+                try:
+                    self.write_values = parse_write_values(self.write_buffer)
+                except ValueError as exc:
+                    self.status_message = f"Invalid input: {exc}"
+                    return
+                self.write_stage = "confirm"
+                self.status_message = "Confirm write: press Y to write, any other key to cancel"
+                return
+            if key in ("\x7f", "\x08"):  # backspace
+                self.write_buffer = self.write_buffer[:-1]
+                return
+            if len(key) == 1 and (key.isalnum() or key == " "):
+                self.write_buffer += key
+            return
+        if self.write_stage == "confirm":
+            if key.lower() == "y":
+                self._perform_write()
+            else:
+                self._cancel_write()
+
+    def _cancel_write(self) -> None:
+        self.write_stage = None
+        self.write_buffer = ""
+        self.write_values = []
+        self.status_message = "Write cancelled"
+
+    def _perform_write(self) -> None:
+        addr, values = self.write_addr, self.write_values
+        self.write_stage = None
+        self.write_buffer = ""
+        self.write_values = []
+        try:
+            self.writer(addr, values)
+        except Exception as exc:  # surface device/auth errors in the status bar
+            self.status_message = f"Write failed: {exc}"
+        else:
+            self.status_message = (
+                f"Wrote {len(values)} byte{'s' if len(values) != 1 else ''} "
+                f"at 0x{addr:04X}"
+            )
+
+    def _render_write_panel(self):
+        machine = self.machine_label or "(unknown machine)"
+        if self.write_stage == "value":
+            body = Text.from_markup(
+                f"[bold]Machine:[/bold] {machine}  "
+                f"[bold]Address:[/bold] 0x{self.write_addr:04X} ({self.write_addr})\n"
+                "Enter byte value(s), separated by spaces — decimal like 5 "
+                "or hex like 0x2F. Multiple values write to consecutive "
+                "addresses.\n"
+                f"[bold]Value(s):[/bold] {self.write_buffer}[blink]▏[/blink]\n"
+                "[dim]Enter to continue, Esc to cancel[/dim]"
+            )
+            return Panel(
+                body,
+                border_style="yellow",
+                padding=(0, 1),
+                title="[bold yellow]Write Memory[/bold yellow]",
+            )
+
+        snapshot = self.tracker.snapshot
+        current_parts = []
+        for i in range(len(self.write_values)):
+            addr = self.write_addr + i
+            if snapshot is not None and 0 <= addr < len(snapshot):
+                current_parts.append(f"0x{snapshot[addr]:02X}")
+            else:
+                current_parts.append("--")
+        new_parts = [f"0x{v:02X}" for v in self.write_values]
+        body = Text.from_markup(
+            f"[bold red]⚠ {WRITE_WARNING}[/bold red]\n"
+            f"[bold]Machine:[/bold] {machine}\n"
+            f"[bold]Address:[/bold] 0x{self.write_addr:04X} ({self.write_addr})  "
+            f"[bold]Bytes:[/bold] {len(self.write_values)}\n"
+            f"[bold]Current value(s):[/bold] {' '.join(current_parts)}\n"
+            f"[bold]New value(s):[/bold] {' '.join(new_parts)}\n"
+            "[bold]Press Y to confirm the write, any other key to cancel.[/bold]"
+        )
+        return Panel(
+            body,
+            border_style="red",
+            padding=(0, 1),
+            title="[bold red]Confirm Memory Write[/bold red]",
+        )
+
     def _move_cursor(self, direction: str) -> None:
         size = len(self.tracker.snapshot) if self.tracker.snapshot else 0
         if size == 0:
@@ -694,7 +849,7 @@ class MemoryDisplay:
             self.status_message = f"Source {source_number} is unavailable"
 
     def _render(self):
-        return render_snapshot(
+        base = render_snapshot(
             self.tracker,
             self.bytes_per_row,
             terminal_width=self._console.size.width,
@@ -709,6 +864,9 @@ class MemoryDisplay:
             show_cursor_info=self.show_cursor_info,
             compact=self.compact,
         )
+        if self.write_stage is not None:
+            return Group(base, self._render_write_panel())
+        return base
 
     def _update_effective_bpr(self) -> None:
         self._effective_bpr = _auto_bytes_per_row(

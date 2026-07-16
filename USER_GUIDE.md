@@ -7,25 +7,24 @@ drive scores, balls, game state, and anything else you want to inspect.
 
 ---
 
-## Before you start: enable broadcasting on Vector
+## Before you start
 
-Memory Mapper is **only a listener** — it doesn't poke Vector or pull data from
-it. Vector has to be actively broadcasting its memory over the local network
-for anything to show up in the tool.
+Memory Mapper finds Vector boards on your network, connects to the one you
+pick, and turns on its memory broadcast for you — no need to touch the Vector
+web UI. You just need two things:
 
-1. Open the Vector web UI.
-2. Enable the **"Broadcast Memory Snapshots on Vector"** toggle.
-3. Make sure the computer running `memory-mapper` is on the **same local
-   network** as Vector. Broadcast traffic is UDP multicast
+1. The computer running `memory-mapper` must be on the **same local network**
+   as Vector. Discovery and the memory stream are UDP broadcast traffic
    (`239.255.0.0:2040` by default) and will not cross routers, VPNs, or
    guest-Wi-Fi isolation.
+2. The **Vector password**, because enabling the broadcast (and writing to
+   memory) are authenticated operations. You can type it at the prompt, pass
+   `--password`, or set the `$VECTOR_PASSWORD` environment variable.
 
-If you don't see any data after starting `memory-mapper`, check those two
-things first:
-
-- Is the broadcast toggle actually on?
-- Are you on the same subnet as Vector (not a guest SSID, not a different VLAN,
-  not tethered to your phone)?
+If you'd rather flip the **"Broadcast Memory Snapshots on Vector"** toggle in
+the Vector web UI yourself, run with `--listen-only`; the tool then behaves as
+a pure listener and never touches the machine (memory writes are unavailable
+in this mode).
 
 ---
 
@@ -61,17 +60,46 @@ memory-mapper
 memory-mapper
 ```
 
-That's it for the common case. The tool will join the multicast group, wait
-for the first packet from Vector, auto-select that sender, and start showing
-memory live.
+That's it for the common case. The tool will:
+
+1. Discover Vector machines on your network (up to 20 seconds).
+2. Auto-select the machine if exactly one is found, or show a numbered list
+   for you to pick from.
+3. Ask for the machine's password (skipped if `--password` or
+   `$VECTOR_PASSWORD` is set).
+4. Enable the memory broadcast on the machine and start showing memory live.
+
+When you quit (`Q` or Ctrl-C), the broadcast is turned back off on the
+machine unless you pass `--keep-broadcasting`.
+
+If you already know the machine, skip discovery:
+
+```bash
+memory-mapper --machine elvira          # LAN name; partial names work
+memory-mapper --machine 192.168.1.50    # or straight to an IP
+```
 
 ### Command-line options
 
 ```
-usage: memory-mapper [-h] [--version] [--group GROUP] [--port PORT]
+usage: memory-mapper [-h] [--version] [--machine NAME_OR_IP]
+                     [--password PASSWORD] [--frequency-ms MS]
+                     [--discover-timeout SECONDS] [--listen-only]
+                     [--keep-broadcasting] [--group GROUP] [--port PORT]
                      [--highlight-duration SECONDS] [--bytes-per-row N]
                      [--source-filter IP]
 
+  --machine NAME_OR_IP          Vector machine to connect to, by LAN name or
+                                IP (default: discover and pick interactively)
+  --password PASSWORD           Vector password (falls back to
+                                $VECTOR_PASSWORD, then a prompt)
+  --frequency-ms MS             How often the machine broadcasts snapshots
+                                (default: 100, clamped to 10-60000)
+  --discover-timeout SECONDS    How long to wait for discovery answers
+                                (default: 20)
+  --listen-only                 Pure listener mode; don't discover or control
+                                a machine
+  --keep-broadcasting           Leave the broadcast enabled on exit
   --group GROUP                 Multicast group to join (default: 239.255.0.0)
   --port PORT                   UDP port to listen on (default: 2040)
   --highlight-duration SECONDS  How long changed bytes stay highlighted
@@ -79,6 +107,7 @@ usage: memory-mapper [-h] [--version] [--group GROUP] [--port PORT]
   --bytes-per-row N             Minimum bytes per row; auto-expands to fill
                                 a wider terminal (default: 16)
   --source-filter IP            Only process packets from this sender IP
+                                (default: the connected machine)
 ```
 
 ---
@@ -126,6 +155,7 @@ usage: memory-mapper [-h] [--version] [--group GROUP] [--port PORT]
 |-----------|------------------------------------------------|
 | `← ↑ ↓ →` | Move the cursor                                |
 | `Space`   | Mark (or unmark) the byte under the cursor     |
+| `W`       | Write value(s) to memory at the cursor         |
 | `1`–`9`   | Switch to source 1–9 (resets tracker state)    |
 | `T`       | Toggle ASCII view on the hex dump              |
 | `B`       | Toggle between BYTE mode and BIT mode          |
@@ -153,6 +183,34 @@ be hidden independently so the hex dump gets as much room as possible:
 | `X` | Export the full snapshot to `all_addresses_<ts>.json`           |
 
 Files are written to the current working directory.
+
+---
+
+## Writing to memory
+
+Once you've found an address, you can change its value directly from the
+viewer. Move the cursor onto the byte and press `W`:
+
+1. **Enter the value(s).** Type a byte value in decimal (`5`) or hex
+   (`0x2F`). Separate multiple values with spaces to write a run of
+   consecutive addresses, e.g. `0x12 0x34 0x56`. Press `Enter` to continue or
+   `Esc` to cancel.
+2. **Confirm.** A red confirmation panel shows the machine, the address, the
+   current value(s), and the new value(s), along with a warning:
+
+   > ⚠ Caution, writing values to memory can have unexpected or harmful
+   > effects, do so with caution.
+
+   Press `Y` to perform the write; **any other key cancels**.
+
+The write goes over the network as an authenticated request, so it requires
+the machine connection made at startup — in `--listen-only` mode (or if you
+skipped the password prompt), `W` reports that writes are unavailable.
+
+Writes land in the machine's live, battery-backed game memory. Writing the
+wrong offset can corrupt scores or settings, or crash the game in progress —
+verify offsets against a known-good memory map for the exact ROM the machine
+is running.
 
 ---
 
@@ -232,9 +290,21 @@ from two different boards.
 ## Troubleshooting
 
 **Nothing appears, it just says "Waiting for data…".**
-Check that **"Broadcast Memory Snapshots on Vector"** is enabled in the
-Vector web UI, and that your computer is on the same local network as Vector.
-Multicast traffic does not cross routers, VPNs, or Wi-Fi client isolation.
+Make sure your computer is on the same local network as Vector — the memory
+stream is UDP broadcast traffic and does not cross routers, VPNs, or Wi-Fi
+client isolation. In `--listen-only` mode, also check that **"Broadcast
+Memory Snapshots on Vector"** is enabled in the Vector web UI.
+
+**"No Vector machines found on the network."**
+Discovery uses UDP broadcast on port 37020 and needs the same-subnet rules as
+above. If you know the machine's IP, connect directly with `--machine <ip>`
+(which skips discovery), or fall back to `--listen-only`.
+
+**"Could not enable the memory broadcast" / authentication errors.**
+The password was wrong or missing. Re-run with `--password`, or set
+`$VECTOR_PASSWORD`. If the machine's firmware is too old to support the
+broadcast toggle route, update it, or enable the toggle in the Vector web UI
+and run with `--listen-only`.
 
 **The `Sources:` list is empty.**
 No packets have been received yet. Same causes as above — the tool hasn't

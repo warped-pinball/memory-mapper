@@ -1,9 +1,15 @@
 # memory-mapper
 
-A cross-platform CLI tool that listens for UDP multicast memory snapshots from a
-Warped Pinball **Vector** board and displays them live in the terminal,
-**highlighting recently-changed bytes** so you can hunt down the addresses that
-drive scores, balls, game state, and anything else you want to inspect.
+A cross-platform CLI tool that discovers Warped Pinball **Vector** boards on
+your network, enables their memory broadcast, and displays the live memory
+snapshots in the terminal, **highlighting recently-changed bytes** so you can
+hunt down the addresses that drive scores, balls, game state, and anything
+else you want to inspect. Once you've found an address, you can also write
+values back to the machine's memory straight from the viewer.
+
+Machine discovery, authentication, and memory writes are handled by the
+[warpedpinball](https://github.com/warped-pinball/python-library) Python
+library.
 
 ## Screenshots
 
@@ -55,37 +61,64 @@ memory-mapper
 memory-mapper
 ```
 
-By default the tool joins multicast group `239.255.0.0` on port `2040`, waits
-for the first packet from Vector, and starts showing memory live. Press
-**Ctrl-C** to exit.
+The tool discovers Vector machines on your local network and lets you pick
+one (or auto-selects when there's only one). Enter the machine's password
+when prompted (or set `$VECTOR_PASSWORD`, or pass `--password`) and the tool
+enables the memory broadcast on the machine for you, then starts showing
+memory live. Press **Ctrl-C** or **Q** to exit; the broadcast is turned back
+off on the way out.
 
-Vector has to be actively broadcasting for anything to appear — enable the
-**"Broadcast Memory Snapshots on Vector"** toggle in the Vector web UI, and make
-sure your computer is on the same local network. See the
+To skip discovery, name the machine directly:
+
+```bash
+memory-mapper --machine elvira            # by LAN name (partial names work)
+memory-mapper --machine 192.168.1.50      # or by IP
+```
+
+If you'd rather enable the broadcast yourself in the Vector web UI (the old
+workflow), run with `--listen-only`; the tool then just listens on multicast
+group `239.255.0.0` port `2040` without touching the machine. See the
 [User Guide](USER_GUIDE.md) for the full walkthrough and troubleshooting.
 
 ## Usage
 
 ```
-usage: memory-mapper [-h] [--version] [--group GROUP] [--port PORT]
+usage: memory-mapper [-h] [--version] [--machine NAME_OR_IP]
+                     [--password PASSWORD] [--frequency-ms MS]
+                     [--discover-timeout SECONDS] [--listen-only]
+                     [--keep-broadcasting] [--group GROUP] [--port PORT]
                      [--highlight-duration SECONDS] [--bytes-per-row N]
                      [--source-filter IP]
 
 options:
   -h, --help                    show this help message and exit
   --version                     show program's version number and exit
+  --machine NAME_OR_IP          Vector machine to connect to, by LAN name or IP
+                                (default: discover and pick interactively)
+  --password PASSWORD           Vector password for enabling the broadcast and
+                                writing memory (falls back to $VECTOR_PASSWORD,
+                                then an interactive prompt)
+  --frequency-ms MS             How often the machine broadcasts snapshots
+                                (default: 100, clamped to 10-60000)
+  --discover-timeout SECONDS    How long to wait for discovery answers (default: 20)
+  --listen-only                 Don't discover or control a machine; just listen
+                                (enable the broadcast in the Vector web UI yourself)
+  --keep-broadcasting           Leave the broadcast enabled on the machine on exit
   --group GROUP                 Multicast group address to join (default: 239.255.0.0)
   --port PORT                   UDP port to listen on (default: 2040)
   --highlight-duration SECONDS  How long changed bytes stay highlighted (default: 3.0)
   --bytes-per-row N             Minimum bytes per row; auto-expands to fill the
                                 terminal width (default: 16)
   --source-filter IP            Only process packets from this sender IP
+                                (default: the connected machine)
 ```
 
 Once running, single-key commands let you navigate the memory map, inspect
 individual bytes, and iteratively filter offsets by how each byte changed
 (changed, unchanged, increased, decreased, and bit-level variants) to track down
-the values you care about. The [User Guide](USER_GUIDE.md) documents every
+the values you care about. Press **W** to write value(s) to memory at the
+cursor — every write shows the details and a warning first, and nothing is
+sent until you confirm. The [User Guide](USER_GUIDE.md) documents every
 keyboard control and walks through the scan workflow.
 
 ## Documentation
