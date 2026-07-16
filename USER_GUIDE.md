@@ -287,10 +287,15 @@ the other.
 
 ## Switching sources
 
-If multiple Vector boards are broadcasting on your network, the menu's
-`Sources:` line lists them numbered `1` through `9`. Press the matching number
-key to switch. Switching sources resets the tracker so you're not mixing state
-from two different boards.
+The menu's `Sources:` line lists every machine on your network, numbered `1`
+through `9`, by name — both the ones actively broadcasting and the ones
+discovery found that are still silent (shown dimmed). Press the matching
+number key to switch.
+
+Selecting a machine that isn't broadcasting yet automatically sends it an
+authenticated request to start broadcasting (prompting for the password first
+if one hasn't been entered). Switching sources resets the tracker so you're
+not mixing state from two different boards.
 
 ---
 

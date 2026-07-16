@@ -74,24 +74,33 @@ class VectorConnection:
     def verify_password(self) -> bool:
         return self.machine.verify_password()
 
+    def _set_broadcast(self, enabled: bool, frequency_ms: int) -> None:
+        """Toggle the broadcast, preferring the library wrapper when present.
+
+        warpedpinball gained Machine.set_memory_broadcast() after 0.1.1; on
+        older versions fall back to calling the firmware route directly.
+        """
+        set_broadcast = getattr(self.machine, "set_memory_broadcast", None)
+        if callable(set_broadcast):
+            set_broadcast(enabled, frequency_ms=frequency_ms)
+            return
+        body = (
+            {"enable": True, "frequency_ms": clamp_frequency_ms(frequency_ms)}
+            if enabled
+            else {"enable": False}
+        )
+        self.machine.call(TOGGLE_BROADCAST_ROUTE, body=body, authenticated=True)
+
     def enable_broadcast(
         self, frequency_ms: int = DEFAULT_BROADCAST_FREQUENCY_MS
     ) -> None:
         """Turn on the UDP memory-snapshot broadcast (authenticated)."""
-        self.machine.call(
-            TOGGLE_BROADCAST_ROUTE,
-            body={"enable": True, "frequency_ms": clamp_frequency_ms(frequency_ms)},
-            authenticated=True,
-        )
+        self._set_broadcast(True, frequency_ms)
         self.broadcast_enabled = True
 
     def disable_broadcast(self) -> None:
         """Turn the UDP memory-snapshot broadcast back off (authenticated)."""
-        self.machine.call(
-            TOGGLE_BROADCAST_ROUTE,
-            body={"enable": False},
-            authenticated=True,
-        )
+        self._set_broadcast(False, DEFAULT_BROADCAST_FREQUENCY_MS)
         self.broadcast_enabled = False
 
     def write_memory(self, offset: int, values: Sequence[int]) -> None:
@@ -242,15 +251,23 @@ class VectorManager:
 
     # -- broadcast control ---------------------------------------------------------
 
-    def request_enable(self, ip: str) -> None:
-        """Ask the worker to enable the memory broadcast on *ip* (deduped)."""
+    def request_enable(self, ip: str, force: bool = False) -> None:
+        """Ask the worker to enable the memory broadcast on *ip* (deduped).
+
+        ``force`` retries even a machine that failed before with the same
+        password — used when the user explicitly selects a machine.
+        """
         with self._lock:
             state = self._enable_state.get(ip)
             if state is not None:
                 status, generation = state
                 if status in ("pending", "enabled"):
                     return
-                if status == "failed" and generation == self._password_generation:
+                if (
+                    status == "failed"
+                    and generation == self._password_generation
+                    and not force
+                ):
                     return  # don't hammer a failing machine until anything changes
             self._enable_state[ip] = ("pending", self._password_generation)
         self._wake.set()

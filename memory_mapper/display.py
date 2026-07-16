@@ -52,6 +52,10 @@ WRITE_WARNING = (
     "effects, do so with caution."
 )
 
+# How long (seconds) to wait for packets before auto-opening the password
+# prompt — a machine that is already broadcasting answers well within this.
+PASSWORD_PROMPT_GRACE = 2.0
+
 # How often (seconds) the display re-renders when there is no user input.
 DATA_REFRESH_INTERVAL = 0.25
 # How often (seconds) the loop polls for keyboard input.
@@ -107,8 +111,10 @@ def _render_menu(
     bit_mode: bool = False,
     compact: bool = False,
     source_names=None,
+    sources=None,
 ):
     senders = tracker.known_senders()
+    listed_sources = sources if sources is not None else senders
     stats = tracker.bit_scan_stats() if bit_mode else tracker.scan_stats()
 
     menu = Table.grid(expand=True)
@@ -116,10 +122,13 @@ def _render_menu(
     menu.add_column(ratio=3)
 
     sender_bits = ["[bold]Sources:[/bold]"]
-    for idx, sender in enumerate(senders[:9], start=1):
-        label = _source_label(sender, source_names)
-        if sender == selected_source:
+    for idx, source in enumerate(listed_sources[:9], start=1):
+        label = _source_label(source, source_names)
+        if source == selected_source:
             sender_bits.append(f"[bold bright_blue]{idx}[/bold bright_blue]:{label}*")
+        elif source not in senders:
+            # Discovered on the network but not (yet) broadcasting to us.
+            sender_bits.append(f"[bright_blue]{idx}[/bright_blue]:[dim]{label}[/dim]")
         else:
             sender_bits.append(f"[bright_blue]{idx}[/bright_blue]:{label}")
 
@@ -318,6 +327,7 @@ def render_snapshot(
     show_cursor_info: bool = True,
     compact: bool = False,
     source_names=None,
+    sources=None,
 ):
     snapshot = tracker.snapshot
 
@@ -344,7 +354,7 @@ def render_snapshot(
                 _render_menu(
                     tracker, selected_source, status_message,
                     ascii_mode=ascii_mode, bit_mode=bit_mode, compact=compact,
-                    source_names=source_names,
+                    source_names=source_names, sources=sources,
                 )
             )
         else:
@@ -427,7 +437,7 @@ def render_snapshot(
             _render_menu(
                 tracker, selected_source, status_message,
                 ascii_mode=ascii_mode, bit_mode=bit_mode, compact=compact,
-                source_names=source_names,
+                source_names=source_names, sources=sources,
             )
         )
     else:
@@ -478,6 +488,7 @@ class MemoryDisplay:
         self._password_declined: bool = False
         self._password_prompted: bool = False
         self._last_tick: float = 0.0
+        self._no_data_since: float = time.monotonic()
         self._console = Console()
         self.status_message = "Waiting for first snapshot"
         self.cursor_pos: int = 0
@@ -811,11 +822,15 @@ class MemoryDisplay:
             and self.password_stage is None
             and self.write_stage is None
         ):
-            target = self.manager.pick_target()
-            if target is not None:
+            target = self.selected_source or self.manager.pick_target()
+            if target is not None and self.manager.machine_name(target) is not None:
                 if self.manager.has_password():
                     self.manager.request_enable(target)
-                elif not self._password_declined and not self._password_prompted:
+                elif (
+                    not self._password_declined
+                    and not self._password_prompted
+                    and now - self._no_data_since >= PASSWORD_PROMPT_GRACE
+                ):
                     self._password_prompted = True
                     self._open_password_prompt()
                     changed = True
@@ -969,20 +984,51 @@ class MemoryDisplay:
             json.dump(export_data, f, indent=2)
         self.status_message = f"Exported {len(entries)} addresses to {filename}"
 
+    def _source_list(self) -> List[str]:
+        """Active senders first, then discovered machines that are silent."""
+        sources = self.tracker.known_senders()
+        if self.manager is not None:
+            for ip in self.manager.machines():
+                if ip not in sources:
+                    sources.append(ip)
+        return sources
+
     def _select_source(self, source_number: int) -> None:
-        senders = self.tracker.known_senders()
+        sources = self._source_list()
         index = source_number - 1
-        if 0 <= index < len(senders):
-            new_source = senders[index]
-            if new_source != self.selected_source:
-                self.selected_source = new_source
-                self.tracker.reset_for_new_source()
-                self.cursor_pos = 0
-                self.status_message = f"Selected source {source_number}: {self.selected_source}. Reset state for new source."
-            else:
-                self.status_message = f"Selected source {source_number}: {self.selected_source}"
-        else:
+        if not (0 <= index < len(sources)):
             self.status_message = f"Source {source_number} is unavailable"
+            return
+        new_source = sources[index]
+        label = (
+            self.manager.label(new_source)
+            if self.manager is not None
+            else new_source
+        )
+        if new_source != self.selected_source:
+            self.selected_source = new_source
+            self.tracker.reset_for_new_source()
+            self.cursor_pos = 0
+            self._no_data_since = time.monotonic()
+            self.status_message = (
+                f"Selected source {source_number}: {label}. Reset state for new source."
+            )
+        else:
+            self.status_message = f"Selected source {source_number}: {label}"
+
+        # A discovered machine we've never heard a packet from isn't
+        # broadcasting yet — ask it to start (which needs the password).
+        needs_broadcast = (
+            self.manager is not None
+            and self.manager.machine_name(new_source) is not None
+            and new_source not in self.tracker.sender_packet_counts
+        )
+        if needs_broadcast:
+            if self.manager.has_password():
+                self.manager.request_enable(new_source, force=True)
+                self.status_message = f"Requesting memory broadcast from {label}…"
+            else:
+                self._open_password_prompt()
 
     def _render(self):
         base = render_snapshot(
@@ -1000,6 +1046,7 @@ class MemoryDisplay:
             show_cursor_info=self.show_cursor_info,
             compact=self.compact,
             source_names=self.manager.machines() if self.manager else None,
+            sources=self._source_list() if self.manager else None,
         )
         if self.password_stage is not None:
             return Group(base, self._render_password_panel())

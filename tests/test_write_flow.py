@@ -77,7 +77,7 @@ class StubManager:
         self._password = password
         self.set_password_calls.append(password)
 
-    def request_enable(self, ip):
+    def request_enable(self, ip, force=False):
         self.enable_requests.append(ip)
 
     def pop_notices(self):
@@ -190,6 +190,7 @@ class TestPasswordFlow:
     def test_background_tick_prompts_when_password_needed(self):
         manager = StubManager(machines={"10.0.0.5": "elvira"})
         display = make_display(manager=manager, snapshot=None)
+        display._no_data_since = 0.0  # pretend the grace period has passed
         assert display._background_tick() is True
         assert display.password_stage == "input"
         # A second tick doesn't re-open or re-prompt.
@@ -222,6 +223,7 @@ class TestPasswordFlow:
     def test_password_entry_sets_password_and_enables(self):
         manager = StubManager(machines={"10.0.0.5": "elvira"})
         display = make_display(manager=manager, snapshot=None)
+        display._no_data_since = 0.0
         display._background_tick()
         send_keys(display, list("hunter2") + ["\r"])
         assert manager.set_password_calls == ["hunter2"]
@@ -231,6 +233,7 @@ class TestPasswordFlow:
     def test_password_escape_skips(self):
         manager = StubManager(machines={"10.0.0.5": "elvira"})
         display = make_display(manager=manager, snapshot=None)
+        display._no_data_since = 0.0
         display._background_tick()
         send_keys(display, ["\x1b"])
         assert display.password_stage is None
@@ -242,6 +245,53 @@ class TestPasswordFlow:
         display = make_display(manager=manager)
         send_keys(display, ["p"])
         assert display.password_stage == "input"
+
+    def test_source_list_merges_senders_and_discovered(self):
+        manager = StubManager(
+            machines={"10.0.0.5": "elvira", "10.0.0.6": "taxi"}
+        )
+        display = make_display(manager=manager)  # sender 10.0.0.5 has data
+        assert display._source_list() == ["10.0.0.5", "10.0.0.6"]
+
+    def test_selecting_silent_machine_requests_broadcast(self):
+        manager = StubManager(
+            machines={"10.0.0.5": "elvira", "10.0.0.6": "taxi"},
+            password="pw",
+        )
+        display = make_display(manager=manager)
+        send_keys(display, ["2"])
+        assert display.selected_source == "10.0.0.6"
+        assert manager.enable_requests == ["10.0.0.6"]
+        assert "Requesting memory broadcast from taxi (10.0.0.6)" in display.status_message
+
+    def test_selecting_silent_machine_without_password_prompts(self):
+        manager = StubManager(
+            machines={"10.0.0.5": "elvira", "10.0.0.6": "taxi"}
+        )
+        display = make_display(manager=manager)
+        send_keys(display, ["2"])
+        assert display.selected_source == "10.0.0.6"
+        assert display.password_stage == "input"
+        assert manager.enable_requests == []
+        # Entering the password requests the broadcast on the selected machine.
+        send_keys(display, list("pw") + ["\r"])
+        assert manager.enable_requests == ["10.0.0.6"]
+
+    def test_selecting_active_sender_does_not_toggle(self):
+        manager = StubManager(
+            machines={"10.0.0.5": "elvira", "10.0.0.6": "taxi"},
+            password="pw",
+        )
+        display = make_display(manager=manager)
+        send_keys(display, ["1"])  # 10.0.0.5 has already sent packets
+        assert display.selected_source == "10.0.0.5"
+        assert manager.enable_requests == []
+
+    def test_selecting_out_of_range_source(self):
+        manager = StubManager(machines={"10.0.0.5": "elvira"})
+        display = make_display(manager=manager)
+        send_keys(display, ["9"])
+        assert "unavailable" in display.status_message
 
     def test_write_prompts_for_password_then_continues(self):
         manager = StubManager(machines={"10.0.0.5": "elvira"})
@@ -255,6 +305,13 @@ class TestPasswordFlow:
         assert display.write_stage == "value"
         send_keys(display, ["7", "\r", "y"])
         assert writer.calls == [(0, [7])]
+
+    def test_background_tick_waits_for_grace_period(self):
+        manager = StubManager(machines={"10.0.0.5": "elvira"})
+        display = make_display(manager=manager, snapshot=None)
+        # Fresh display: still within the grace window, so no prompt yet.
+        assert display._background_tick() is False
+        assert display.password_stage is None
 
     def test_password_panel_masks_input(self):
         manager = StubManager(machines={"10.0.0.5": "elvira"})

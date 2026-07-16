@@ -85,6 +85,22 @@ class TestVectorConnection:
         )
         assert conn.broadcast_enabled is False
 
+    def test_enable_prefers_library_wrapper_when_present(self):
+        class WrapperMachine(FakeMachine):
+            def __init__(self):
+                super().__init__()
+                self.toggles = []
+
+            def set_memory_broadcast(self, enabled, frequency_ms=100):
+                self.toggles.append((enabled, frequency_ms))
+
+        machine = WrapperMachine()
+        conn = VectorConnection(machine, ip="10.0.0.5")
+        conn.enable_broadcast(frequency_ms=250)
+        conn.disable_broadcast()
+        assert machine.toggles == [(True, 250), (False, 100)]
+        assert machine.calls == []  # raw route fallback never used
+
     def test_write_memory_passes_through(self):
         conn, machine = self._connection()
         conn.write_memory(0x2134, [5, 0x12])
@@ -255,6 +271,13 @@ class TestVectorManager:
         manager._process_enable_requests()
         assert manager.broadcast_enabled("10.0.0.5") is False
         assert "Could not enable" in manager.pop_notices()[-1]
+        # A plain re-request is deduped, but force retries immediately.
+        manager.request_enable("10.0.0.5")
+        with manager._lock:
+            assert manager._enable_state["10.0.0.5"][0] == "failed"
+        manager.request_enable("10.0.0.5", force=True)
+        with manager._lock:
+            assert manager._enable_state["10.0.0.5"][0] == "pending"
 
     def test_write_goes_through_connection(self, monkeypatch):
         manager, fakes = make_manager(
