@@ -1,8 +1,11 @@
-"""Tests for memory_mapper.vector (Vector connection layer)."""
+"""Tests for memory_mapper.vector (Vector connection layer and manager)."""
+
+import time
 
 import pytest
 
 from memory_mapper.vector import (
+    VectorManager,
     BROADCAST_FREQUENCY_MAX_MS,
     BROADCAST_FREQUENCY_MIN_MS,
     TOGGLE_BROADCAST_ROUTE,
@@ -114,3 +117,197 @@ class TestVectorConnection:
         conn, machine = self._connection()
         conn.close()
         assert machine.closed is True
+
+
+class FakeDiscovered:
+    def __init__(self, ip, name):
+        self.ip = ip
+        self.name = name
+
+
+def make_manager(machines=None, password=None, target=None, monkeypatch=None):
+    """A VectorManager with stubbed discovery/connect; worker not started."""
+    fake_machines = {}  # ip -> FakeMachine
+
+    def discover_fn(timeout):
+        return [FakeDiscovered(ip, name) for ip, name in (machines or {}).items()]
+
+    def connect_fn(ip, password=None, timeout=None):
+        fake = FakeMachine(password=password)
+        fake_machines[ip] = fake
+        return VectorConnection(fake, ip=ip)
+
+    manager = VectorManager(
+        password=password,
+        target=target,
+        discover_fn=discover_fn,
+        connect_fn=connect_fn,
+    )
+    if monkeypatch is not None:
+        monkeypatch.delenv("VECTOR_PASSWORD", raising=False)
+    return manager, fake_machines
+
+
+class TestVectorManager:
+    def test_discovery_populates_machines_and_notices(self, monkeypatch):
+        manager, _ = make_manager(
+            machines={"10.0.0.5": "elvira"}, monkeypatch=monkeypatch
+        )
+        manager._discover_once()
+        assert manager.machines() == {"10.0.0.5": "elvira"}
+        assert manager.machine_name("10.0.0.5") == "elvira"
+        notices = manager.pop_notices()
+        assert notices == ["Discovered elvira (10.0.0.5)"]
+        # Re-discovery of the same machine is silent.
+        manager._discover_once()
+        assert manager.pop_notices() == []
+
+    def test_discovery_error_reported_once(self, monkeypatch):
+        def boom(timeout):
+            raise RuntimeError("no network")
+
+        manager = VectorManager(discover_fn=boom, connect_fn=lambda *a, **k: None)
+        manager._discover_once()
+        manager._discover_once()
+        assert manager.pop_notices() == ["Discovery error: no network"]
+
+    def test_pick_target_first_by_default(self, monkeypatch):
+        manager, _ = make_manager(
+            machines={"10.0.0.5": "elvira", "10.0.0.6": "taxi"},
+            monkeypatch=monkeypatch,
+        )
+        manager._discover_once()
+        assert manager.pick_target() == "10.0.0.5"
+
+    def test_pick_target_matches_name_and_ip(self, monkeypatch):
+        manager, _ = make_manager(
+            machines={"10.0.0.5": "elvira", "10.0.0.6": "taxi"},
+            target="tax",
+            monkeypatch=monkeypatch,
+        )
+        manager._discover_once()
+        assert manager.pick_target() == "10.0.0.6"
+        manager.target = "10.0.0.5"
+        assert manager.pick_target() == "10.0.0.5"
+        manager.target = "no-such-machine"
+        assert manager.pick_target() is None
+
+    def test_enable_with_password(self, monkeypatch):
+        manager, fakes = make_manager(
+            machines={"10.0.0.5": "elvira"},
+            password="hunter2",
+            monkeypatch=monkeypatch,
+        )
+        manager._discover_once()
+        manager.pop_notices()  # drain the discovery notice
+        manager.request_enable("10.0.0.5")
+        manager._process_enable_requests()
+        assert manager.broadcast_enabled("10.0.0.5") is True
+        assert fakes["10.0.0.5"].calls == [
+            (
+                TOGGLE_BROADCAST_ROUTE,
+                {"enable": True, "frequency_ms": 100},
+                True,
+            )
+        ]
+        assert manager.pop_notices() == [
+            "Enabled memory broadcast on elvira (10.0.0.5)"
+        ]
+        # A repeated request is a no-op.
+        manager.request_enable("10.0.0.5")
+        manager._process_enable_requests()
+        assert len(fakes["10.0.0.5"].calls) == 1
+
+    def test_enable_without_password_fails_until_password_set(self, monkeypatch):
+        manager, fakes = make_manager(
+            machines={"10.0.0.5": "elvira"}, monkeypatch=monkeypatch
+        )
+        manager._discover_once()
+        manager.request_enable("10.0.0.5")
+        manager._process_enable_requests()
+        assert manager.broadcast_enabled("10.0.0.5") is False
+        assert "Password needed" in manager.pop_notices()[-1]
+        # Re-requesting with the same (missing) password is deduped.
+        manager.request_enable("10.0.0.5")
+        manager._process_enable_requests()
+        assert fakes == {}
+        # Setting a password retries automatically.
+        manager.set_password("hunter2")
+        manager._process_enable_requests()
+        assert manager.broadcast_enabled("10.0.0.5") is True
+
+    def test_enable_failure_reported(self, monkeypatch):
+        class FailingMachine(FakeMachine):
+            def call(self, *args, **kwargs):
+                raise RuntimeError("auth rejected")
+
+        def connect_fn(ip, password=None, timeout=None):
+            return VectorConnection(FailingMachine(), ip=ip)
+
+        manager = VectorManager(
+            password="wrong",
+            discover_fn=lambda timeout: [FakeDiscovered("10.0.0.5", "elvira")],
+            connect_fn=connect_fn,
+        )
+        manager._discover_once()
+        manager.pop_notices()
+        manager.request_enable("10.0.0.5")
+        manager._process_enable_requests()
+        assert manager.broadcast_enabled("10.0.0.5") is False
+        assert "Could not enable" in manager.pop_notices()[-1]
+
+    def test_write_goes_through_connection(self, monkeypatch):
+        manager, fakes = make_manager(
+            machines={"10.0.0.5": "elvira"},
+            password="hunter2",
+            monkeypatch=monkeypatch,
+        )
+        manager.write("10.0.0.5", 0x2134, [5])
+        assert fakes["10.0.0.5"].writes == [(0x2134, [5])]
+
+    def test_shutdown_disables_enabled_broadcasts(self, monkeypatch):
+        manager, fakes = make_manager(
+            machines={"10.0.0.5": "elvira"},
+            password="hunter2",
+            monkeypatch=monkeypatch,
+        )
+        manager._discover_once()
+        manager.request_enable("10.0.0.5")
+        manager._process_enable_requests()
+        manager.shutdown(disable_broadcasts=True)
+        fake = fakes["10.0.0.5"]
+        assert fake.calls[-1] == (TOGGLE_BROADCAST_ROUTE, {"enable": False}, True)
+        assert fake.closed is True
+
+    def test_shutdown_keeps_broadcast_when_asked(self, monkeypatch):
+        manager, fakes = make_manager(
+            machines={"10.0.0.5": "elvira"},
+            password="hunter2",
+            monkeypatch=monkeypatch,
+        )
+        manager._discover_once()
+        manager.request_enable("10.0.0.5")
+        manager._process_enable_requests()
+        manager.shutdown(disable_broadcasts=False)
+        assert all(call[1].get("enable") for call in fakes["10.0.0.5"].calls)
+
+    def test_worker_thread_discovers_and_enables(self, monkeypatch):
+        manager, fakes = make_manager(
+            machines={"10.0.0.5": "elvira"},
+            password="hunter2",
+            monkeypatch=monkeypatch,
+        )
+        manager.start()
+        try:
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline and not manager.machines():
+                time.sleep(0.01)
+            assert manager.machines() == {"10.0.0.5": "elvira"}
+            manager.request_enable("10.0.0.5")
+            while time.monotonic() < deadline and not manager.broadcast_enabled(
+                "10.0.0.5"
+            ):
+                time.sleep(0.01)
+            assert manager.broadcast_enabled("10.0.0.5") is True
+        finally:
+            manager.shutdown(disable_broadcasts=False)

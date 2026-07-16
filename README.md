@@ -61,14 +61,14 @@ memory-mapper
 memory-mapper
 ```
 
-The tool discovers Vector machines on your local network and lets you pick
-one (or auto-selects when there's only one). Enter the machine's password
-when prompted (or set `$VECTOR_PASSWORD`, or pass `--password`) and the tool
-enables the memory broadcast on the machine for you, then starts showing
-memory live. Press **Ctrl-C** or **Q** to exit; the broadcast is turned back
-off on the way out.
+The viewer starts immediately. In the background it continuously discovers
+Vector machines on your local network, and when one is found it enables the
+machine's memory broadcast for you — prompting for the Vector password in
+the app the first time it's needed (skip the prompt by passing `--password`
+or setting `$VECTOR_PASSWORD`). Memory then starts streaming in live. Press
+**Ctrl-C** or **Q** to exit; the broadcast is turned back off on the way out.
 
-To skip discovery, name the machine directly:
+To focus on a specific machine when several are on the network:
 
 ```bash
 memory-mapper --machine elvira            # by LAN name (partial names work)
@@ -93,15 +93,16 @@ usage: memory-mapper [-h] [--version] [--machine NAME_OR_IP]
 options:
   -h, --help                    show this help message and exit
   --version                     show program's version number and exit
-  --machine NAME_OR_IP          Vector machine to connect to, by LAN name or IP
-                                (default: discover and pick interactively)
+  --machine NAME_OR_IP          Vector machine to focus on, by LAN name or IP
+                                (default: the first machine discovered)
   --password PASSWORD           Vector password for enabling the broadcast and
-                                writing memory (falls back to $VECTOR_PASSWORD,
-                                then an interactive prompt)
+                                writing memory (falls back to $VECTOR_PASSWORD;
+                                otherwise the app prompts when it's needed)
   --frequency-ms MS             How often the machine broadcasts snapshots
                                 (default: 100, clamped to 10-60000)
-  --discover-timeout SECONDS    How long to wait for discovery answers (default: 20)
-  --listen-only                 Don't discover or control a machine; just listen
+  --discover-timeout SECONDS    How long each background discovery round listens
+                                (default: 5)
+  --listen-only                 Never discover or control machines; just listen
                                 (enable the broadcast in the Vector web UI yourself)
   --keep-broadcasting           Leave the broadcast enabled on the machine on exit
   --group GROUP                 Multicast group address to join (default: 239.255.0.0)
@@ -110,7 +111,6 @@ options:
   --bytes-per-row N             Minimum bytes per row; auto-expands to fill the
                                 terminal width (default: 16)
   --source-filter IP            Only process packets from this sender IP
-                                (default: the connected machine)
 ```
 
 Once running, single-key commands let you navigate the memory map, inspect

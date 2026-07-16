@@ -17,7 +17,7 @@ class TestBuildParser:
         assert args.machine is None
         assert args.password is None
         assert args.frequency_ms == 100
-        assert args.discover_timeout == 20.0
+        assert args.discover_timeout == 5.0
         assert args.listen_only is False
         assert args.keep_broadcasting is False
 

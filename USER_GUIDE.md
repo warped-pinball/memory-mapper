@@ -9,17 +9,19 @@ drive scores, balls, game state, and anything else you want to inspect.
 
 ## Before you start
 
-Memory Mapper finds Vector boards on your network, connects to the one you
-pick, and turns on its memory broadcast for you — no need to touch the Vector
-web UI. You just need two things:
+Memory Mapper continuously looks for Vector boards on your network in the
+background and turns on the memory broadcast for you — no need to touch the
+Vector web UI. You just need two things:
 
 1. The computer running `memory-mapper` must be on the **same local network**
    as Vector. Discovery and the memory stream are UDP broadcast traffic
    (`239.255.0.0:2040` by default) and will not cross routers, VPNs, or
    guest-Wi-Fi isolation.
 2. The **Vector password**, because enabling the broadcast (and writing to
-   memory) are authenticated operations. You can type it at the prompt, pass
-   `--password`, or set the `$VECTOR_PASSWORD` environment variable.
+   memory) are authenticated operations. The app prompts for it the first
+   time it's needed; you can also pass `--password`, set the
+   `$VECTOR_PASSWORD` environment variable, or press `P` in the app at any
+   time.
 
 If you'd rather flip the **"Broadcast Memory Snapshots on Vector"** toggle in
 the Vector web UI yourself, run with `--listen-only`; the tool then behaves as
@@ -60,19 +62,22 @@ memory-mapper
 memory-mapper
 ```
 
-That's it for the common case. The tool will:
+That's it for the common case. The viewer opens immediately and, in the
+background:
 
-1. Discover Vector machines on your network (up to 20 seconds).
-2. Auto-select the machine if exactly one is found, or show a numbered list
-   for you to pick from.
-3. Ask for the machine's password (skipped if `--password` or
-   `$VECTOR_PASSWORD` is set).
-4. Enable the memory broadcast on the machine and start showing memory live.
+1. Continuously discovers Vector machines on your network (discovered
+   machines show up in the "Waiting for data…" panel and in the `Sources:`
+   list, by name).
+2. When a machine is found, asks for its password in the app (skipped if
+   `--password` or `$VECTOR_PASSWORD` is set — press `Esc` to stay a passive
+   listener, and `P` later if you change your mind).
+3. Enables the memory broadcast on the machine and starts showing memory
+   live.
 
-When you quit (`Q` or Ctrl-C), the broadcast is turned back off on the
-machine unless you pass `--keep-broadcasting`.
+When you quit (`Q` or Ctrl-C), any broadcast the tool enabled is turned back
+off unless you pass `--keep-broadcasting`.
 
-If you already know the machine, skip discovery:
+If several machines are on the network, focus on one:
 
 ```bash
 memory-mapper --machine elvira          # LAN name; partial names work
@@ -89,16 +94,17 @@ usage: memory-mapper [-h] [--version] [--machine NAME_OR_IP]
                      [--highlight-duration SECONDS] [--bytes-per-row N]
                      [--source-filter IP]
 
-  --machine NAME_OR_IP          Vector machine to connect to, by LAN name or
-                                IP (default: discover and pick interactively)
+  --machine NAME_OR_IP          Vector machine to focus on, by LAN name or
+                                IP (default: the first machine discovered)
   --password PASSWORD           Vector password (falls back to
-                                $VECTOR_PASSWORD, then a prompt)
+                                $VECTOR_PASSWORD; otherwise the app prompts
+                                when it's needed)
   --frequency-ms MS             How often the machine broadcasts snapshots
                                 (default: 100, clamped to 10-60000)
-  --discover-timeout SECONDS    How long to wait for discovery answers
-                                (default: 20)
-  --listen-only                 Pure listener mode; don't discover or control
-                                a machine
+  --discover-timeout SECONDS    How long each background discovery round
+                                listens (default: 5)
+  --listen-only                 Pure listener mode; never discover or control
+                                machines
   --keep-broadcasting           Leave the broadcast enabled on exit
   --group GROUP                 Multicast group to join (default: 239.255.0.0)
   --port PORT                   UDP port to listen on (default: 2040)
@@ -156,6 +162,7 @@ usage: memory-mapper [-h] [--version] [--machine NAME_OR_IP]
 | `← ↑ ↓ →` | Move the cursor                                |
 | `Space`   | Mark (or unmark) the byte under the cursor     |
 | `W`       | Write value(s) to memory at the cursor         |
+| `P`       | Enter (or change) the Vector password          |
 | `1`–`9`   | Switch to source 1–9 (resets tracker state)    |
 | `T`       | Toggle ASCII view on the hex dump              |
 | `B`       | Toggle between BYTE mode and BIT mode          |
@@ -203,9 +210,9 @@ viewer. Move the cursor onto the byte and press `W`:
 
    Press `Y` to perform the write; **any other key cancels**.
 
-The write goes over the network as an authenticated request, so it requires
-the machine connection made at startup — in `--listen-only` mode (or if you
-skipped the password prompt), `W` reports that writes are unavailable.
+The write goes over the network as an authenticated request. If no password
+has been entered yet, pressing `W` asks for it first and then continues the
+write. In `--listen-only` mode, `W` reports that writes are unavailable.
 
 Writes land in the machine's live, battery-backed game memory. Writing the
 wrong offset can corrupt scores or settings, or crash the game in progress —
@@ -295,16 +302,17 @@ stream is UDP broadcast traffic and does not cross routers, VPNs, or Wi-Fi
 client isolation. In `--listen-only` mode, also check that **"Broadcast
 Memory Snapshots on Vector"** is enabled in the Vector web UI.
 
-**"No Vector machines found on the network."**
+**No machines are being discovered.**
 Discovery uses UDP broadcast on port 37020 and needs the same-subnet rules as
-above. If you know the machine's IP, connect directly with `--machine <ip>`
-(which skips discovery), or fall back to `--listen-only`.
+above. The tool keeps retrying in the background, so a machine that boots up
+later will still be found. If discovery can't work on your network, enable
+the broadcast in the Vector web UI and the tool will pick up the data anyway.
 
-**"Could not enable the memory broadcast" / authentication errors.**
-The password was wrong or missing. Re-run with `--password`, or set
-`$VECTOR_PASSWORD`. If the machine's firmware is too old to support the
-broadcast toggle route, update it, or enable the toggle in the Vector web UI
-and run with `--listen-only`.
+**Status says "Could not enable memory broadcast…".**
+The password was wrong, or the machine was unreachable. Press `P` to re-enter
+the password (the tool retries automatically). If the machine's firmware is
+too old to support the broadcast toggle route, update it, or enable the
+toggle in the Vector web UI instead.
 
 **The `Sources:` list is empty.**
 No packets have been received yet. Same causes as above — the tool hasn't

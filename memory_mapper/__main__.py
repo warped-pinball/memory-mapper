@@ -1,8 +1,7 @@
 """Entry point for the memory-mapper CLI tool."""
 
 import argparse
-import getpass
-import os
+import ipaddress
 import sys
 import threading
 
@@ -21,16 +20,16 @@ DEFAULT_MULTICAST_GROUP = "239.255.0.0"
 DEFAULT_PORT = 2040
 DEFAULT_HIGHLIGHT_DURATION = 3.0
 DEFAULT_BYTES_PER_ROW = 16
-PASSWORD_ENV_VAR = "VECTOR_PASSWORD"
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="memory-mapper",
         description=(
-            "Discover Warped Pinball Vector boards, enable their memory "
-            "broadcast, and display the live memory snapshots in the "
-            "terminal, highlighting recently-changed bytes."
+            "Listen for UDP memory snapshots from Warped Pinball Vector "
+            "boards and display them in the terminal, highlighting "
+            "recently-changed bytes. Machines are discovered in the "
+            "background and their memory broadcast is enabled automatically."
         ),
     )
     parser.add_argument(
@@ -41,18 +40,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="NAME_OR_IP",
         help=(
-            "Vector machine to connect to, by LAN name (partial names work) or "
-            "IP address. By default machines are discovered on the network and "
-            "you pick one."
+            "Vector machine to focus on, by LAN name (partial names work) or "
+            "IP address. By default the first machine discovered on the "
+            "network is used."
         ),
     )
     parser.add_argument(
         "--password",
         default=None,
         help=(
-            "Vector password, used to enable the memory broadcast and to write "
-            f"memory (falls back to ${PASSWORD_ENV_VAR}, then an interactive "
-            "prompt)."
+            "Vector password, used to enable the memory broadcast and to "
+            f"write memory (falls back to ${vector.PASSWORD_ENV_VAR}; "
+            "otherwise the app prompts when it's needed)."
         ),
     )
     parser.add_argument(
@@ -72,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=vector.DEFAULT_DISCOVER_TIMEOUT,
         metavar="SECONDS",
         help=(
-            "How long to wait for machines to answer discovery "
+            "How long each background discovery round listens for answers "
             f"(default: {vector.DEFAULT_DISCOVER_TIMEOUT:g})"
         ),
     )
@@ -80,9 +79,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--listen-only",
         action="store_true",
         help=(
-            "Skip discovery and machine control entirely; just listen for "
-            "broadcasts (the pre-1.4 behavior). Enable the broadcast toggle in "
-            "the Vector web UI yourself; memory writes are unavailable."
+            "Never discover or control machines; just listen for broadcasts. "
+            "Enable the broadcast toggle in the Vector web UI yourself; "
+            "memory writes are unavailable."
         ),
     )
     parser.add_argument(
@@ -125,106 +124,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--source-filter",
         default=None,
         help=(
-            "Only process packets from this sender IP. Defaults to the "
-            "connected machine's IP, or the first detected sender in "
-            "listen-only mode."
+            "Only process packets from this sender IP. By default, the first "
+            "detected sender is selected."
         ),
     )
     return parser
 
 
-def _choose_machine(machines):
-    """Interactively pick one machine from a discovery result."""
-    print("Discovered Vector machines:")
-    for idx, machine in enumerate(machines, start=1):
-        print(f"  {idx}. {machine.name} ({machine.ip})")
-    while True:
-        try:
-            answer = input(f"Select a machine [1-{len(machines)}]: ").strip()
-        except EOFError:
-            return None
-        if not answer:
-            continue
-        if answer.isdigit() and 1 <= int(answer) <= len(machines):
-            return machines[int(answer) - 1]
-        print(f"Please enter a number between 1 and {len(machines)}.")
-
-
-def _resolve_password(cli_password):
-    """CLI flag, then $VECTOR_PASSWORD, then an interactive prompt."""
-    password = cli_password or os.environ.get(PASSWORD_ENV_VAR)
-    if password:
-        return password
-    if not sys.stdin.isatty():
-        return None
-    print(
-        "A password is needed to enable the memory broadcast on the machine "
-        "(and to write memory)."
-    )
+def _is_ip(value: str) -> bool:
     try:
-        password = getpass.getpass("Vector password (Enter to skip): ")
-    except (EOFError, KeyboardInterrupt):
-        return None
-    return password or None
-
-
-def _establish_connection(args):
-    """Discover/connect to a machine and enable its memory broadcast.
-
-    Returns a VectorConnection, or None to continue in listen-only mode.
-    Raises SystemExit with a message when connecting is impossible.
-    """
-    if args.machine:
-        print(f"Connecting to {args.machine}…")
-        connection = vector.connect_machine(
-            args.machine, timeout=args.discover_timeout
-        )
-    else:
-        print(
-            f"Discovering Vector machines (up to {args.discover_timeout:g}s)…"
-        )
-        machines = vector.discover_machines(timeout=args.discover_timeout)
-        if not machines:
-            raise SystemExit(
-                "No Vector machines found on the network. Make sure the "
-                "machine is powered on and on the same network, or connect "
-                "directly with --machine <ip>, or use --listen-only."
-            )
-        if len(machines) == 1:
-            chosen = machines[0]
-            print(f"Found one machine: {chosen.name} ({chosen.ip})")
-        elif sys.stdin.isatty():
-            chosen = _choose_machine(machines)
-            if chosen is None:
-                raise SystemExit("No machine selected.")
-        else:
-            names = ", ".join(f"{m.name} ({m.ip})" for m in machines)
-            raise SystemExit(
-                f"Multiple machines found ({names}) and no terminal to pick "
-                "one; re-run with --machine <name or ip>."
-            )
-        connection = vector.connection_from_discovered(chosen)
-
-    connection.machine.password = _resolve_password(args.password)
-    if not connection.has_password():
-        print(
-            "No password provided; continuing in listen-only mode. Enable "
-            '"Broadcast Memory Snapshots" in the Vector web UI yourself. '
-            "Memory writes are unavailable."
-        )
-        connection.close()
-        return None
-
-    print(f"Enabling memory broadcast on {connection.label}…")
-    try:
-        connection.enable_broadcast(frequency_ms=args.frequency_ms)
-    except Exception as exc:
-        connection.close()
-        raise SystemExit(
-            f"Could not enable the memory broadcast on {connection.label}: "
-            f"{exc}"
-        )
-    return connection
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
 
 
 def main(argv=None) -> int:
@@ -242,20 +154,23 @@ def main(argv=None) -> int:
     if args.discover_timeout <= 0:
         parser.error("--discover-timeout must be a positive number")
 
-    connection = None
+    manager = None
     if not args.listen_only:
-        try:
-            connection = _establish_connection(args)
-        except vector.VectorUnavailableError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        except SystemExit as exc:
-            if exc.code is not None and not isinstance(exc.code, int):
-                print(exc.code, file=sys.stderr)
-                return 1
-            raise
-        except KeyboardInterrupt:
-            return 130
+        if vector.warpedpinball is None:
+            print(
+                "Warning: the 'warpedpinball' library is not installed; "
+                "running in listen-only mode. Install it with: pip install "
+                "warpedpinball",
+                file=sys.stderr,
+            )
+        else:
+            manager = vector.VectorManager(
+                password=args.password,
+                frequency_ms=args.frequency_ms,
+                discover_timeout=args.discover_timeout,
+                target=args.machine,
+            )
+            manager.start()
 
     tracker = MemoryTracker(highlight_duration=args.highlight_duration)
 
@@ -277,24 +192,24 @@ def main(argv=None) -> int:
     stop_event = threading.Event()
 
     selected_source = args.source_filter
-    if selected_source is None and connection is not None:
-        selected_source = connection.ip
+    if selected_source is None and args.machine and _is_ip(args.machine):
+        selected_source = args.machine
 
     writer = None
-    if connection is not None:
-        writer = connection.write_memory
+    if manager is not None:
+        def writer(offset, values):
+            ip = display.selected_source or manager.pick_target()
+            if ip is None:
+                raise RuntimeError("no Vector machine discovered yet")
+            manager.write(ip, offset, values)
 
     display = MemoryDisplay(
         tracker,
         bytes_per_row=args.bytes_per_row,
         selected_source=selected_source,
         writer=writer,
-        machine_label=connection.label if connection is not None else None,
+        manager=manager,
     )
-    if connection is not None:
-        display.status_message = (
-            f"Connected to {connection.label}; waiting for first snapshot"
-        )
 
     receiver_thread = start_receiver(args.group, args.port, on_packet, stop_event)
 
@@ -305,18 +220,8 @@ def main(argv=None) -> int:
     finally:
         stop_event.set()
         receiver_thread.join(timeout=2.0)
-        if connection is not None:
-            if connection.broadcast_enabled and not args.keep_broadcasting:
-                try:
-                    connection.disable_broadcast()
-                    print(f"Disabled memory broadcast on {connection.label}.")
-                except Exception as exc:
-                    print(
-                        f"Could not disable the memory broadcast on "
-                        f"{connection.label}: {exc}",
-                        file=sys.stderr,
-                    )
-            connection.close()
+        if manager is not None:
+            manager.shutdown(disable_broadcasts=not args.keep_broadcasting)
 
     return 0
 

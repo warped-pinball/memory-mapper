@@ -5,14 +5,23 @@ toggle, and memory writes so the rest of the tool never has to talk to the
 library (or the firmware routes) directly.
 """
 
-from typing import List, Optional, Sequence
+import os
+import threading
+import time
+from collections import OrderedDict
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 try:
     import warpedpinball
 except ImportError:  # pragma: no cover - exercised via _require_library tests
     warpedpinball = None
 
-DEFAULT_DISCOVER_TIMEOUT = 20.0
+PASSWORD_ENV_VAR = "VECTOR_PASSWORD"
+# How long each background discovery round listens for answers. Discovery
+# returns early once the registry replies, so rounds are usually much shorter.
+DEFAULT_DISCOVER_TIMEOUT = 5.0
+# Pause between background discovery rounds.
+DISCOVER_REST_INTERVAL = 2.0
 DEFAULT_BROADCAST_FREQUENCY_MS = 100
 # Firmware clamps to the same bounds; mirroring them avoids surprises.
 BROADCAST_FREQUENCY_MIN_MS = 10
@@ -119,9 +128,220 @@ def connect_machine(
     return VectorConnection(machine, ip=host, name=machine.name)
 
 
-def connection_from_discovered(machine_info, password: Optional[str] = None) -> VectorConnection:
-    """Build a connection straight from a DiscoveredMachine (skips re-discovery)."""
-    wp = _require_library()
-    machine = wp.connect(machine_info.ip, password=password)
-    machine.name = machine_info.name
-    return VectorConnection(machine, ip=machine_info.ip, name=machine_info.name)
+class VectorManager:
+    """Continuous background discovery plus on-demand machine control.
+
+    A daemon worker thread owns discovery and broadcast toggling so the UI
+    never blocks on the network; memory writes stay synchronous so their
+    outcome can be reported directly. Thread-safe throughout.
+    """
+
+    def __init__(
+        self,
+        password: Optional[str] = None,
+        frequency_ms: int = DEFAULT_BROADCAST_FREQUENCY_MS,
+        discover_timeout: float = DEFAULT_DISCOVER_TIMEOUT,
+        target: Optional[str] = None,
+        discover_fn: Optional[Callable[..., List]] = None,
+        connect_fn: Optional[Callable[..., VectorConnection]] = None,
+    ):
+        self.frequency_ms = frequency_ms
+        self.discover_timeout = discover_timeout
+        #: Optional machine to focus on (--machine): an IP or a (partial) name.
+        self.target = target
+        self._discover_fn = discover_fn or discover_machines
+        self._connect_fn = connect_fn or connect_machine
+        self._password = password or None
+        self._password_generation = 0
+        self._machines: "OrderedDict[str, str]" = OrderedDict()  # ip -> name
+        self._connections: Dict[str, VectorConnection] = {}
+        # ip -> (state, password_generation); state: pending/enabled/failed
+        self._enable_state: Dict[str, Tuple[str, int]] = {}
+        self._notices: List[str] = []
+        self._last_discovery_error: Optional[str] = None
+        self._lock = threading.RLock()
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    # -- lifecycle -----------------------------------------------------------
+
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="vector-manager"
+        )
+        self._thread.start()
+
+    def shutdown(self, disable_broadcasts: bool = True) -> None:
+        """Stop the worker, optionally turn off broadcasts we enabled, clean up."""
+        self._stop.set()
+        self._wake.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+        with self._lock:
+            enabled = [
+                ip for ip, (state, _) in self._enable_state.items()
+                if state == "enabled"
+            ]
+            connections = list(self._connections.values())
+        if disable_broadcasts:
+            for ip in enabled:
+                try:
+                    self._connection(ip).disable_broadcast()
+                except Exception:
+                    pass  # machine unreachable at exit; nothing more to do
+        for connection in connections:
+            connection.close()
+
+    # -- credentials -----------------------------------------------------------
+
+    @property
+    def password(self) -> Optional[str]:
+        return self._password or os.environ.get(PASSWORD_ENV_VAR)
+
+    def has_password(self) -> bool:
+        return bool(self.password)
+
+    def set_password(self, password: Optional[str]) -> None:
+        """Store a password and retry any machines that failed to enable."""
+        with self._lock:
+            self._password = password or None
+            self._password_generation += 1
+            for ip, (state, gen) in list(self._enable_state.items()):
+                if state == "failed":
+                    self._enable_state[ip] = ("pending", gen)
+        self._wake.set()
+
+    # -- discovered machines -----------------------------------------------------
+
+    def machines(self) -> Dict[str, str]:
+        """Snapshot of discovered machines as {ip: name}, in discovery order."""
+        with self._lock:
+            return dict(self._machines)
+
+    def machine_name(self, ip: str) -> Optional[str]:
+        with self._lock:
+            return self._machines.get(ip)
+
+    def label(self, ip: str) -> str:
+        name = self.machine_name(ip)
+        return f"{name} ({ip})" if name else ip
+
+    def pick_target(self) -> Optional[str]:
+        """The machine to control: the --machine match, or the first found."""
+        with self._lock:
+            if not self._machines:
+                return None
+            if self.target:
+                wanted = self.target.lower()
+                for ip, name in self._machines.items():
+                    if ip == self.target or (name and wanted in name.lower()):
+                        return ip
+                return None
+            return next(iter(self._machines))
+
+    # -- broadcast control ---------------------------------------------------------
+
+    def request_enable(self, ip: str) -> None:
+        """Ask the worker to enable the memory broadcast on *ip* (deduped)."""
+        with self._lock:
+            state = self._enable_state.get(ip)
+            if state is not None:
+                status, generation = state
+                if status in ("pending", "enabled"):
+                    return
+                if status == "failed" and generation == self._password_generation:
+                    return  # don't hammer a failing machine until anything changes
+            self._enable_state[ip] = ("pending", self._password_generation)
+        self._wake.set()
+
+    def broadcast_enabled(self, ip: str) -> bool:
+        with self._lock:
+            state = self._enable_state.get(ip)
+            return state is not None and state[0] == "enabled"
+
+    # -- memory writes ----------------------------------------------------------------
+
+    def write(self, ip: str, offset: int, values: Sequence[int]) -> None:
+        """Synchronous authenticated memory write to the machine at *ip*."""
+        self._connection(ip).write_memory(offset, values)
+
+    # -- UI notices --------------------------------------------------------------------
+
+    def pop_notices(self) -> List[str]:
+        """Drain queued status messages (discoveries, enable results, errors)."""
+        with self._lock:
+            notices, self._notices = self._notices, []
+            return notices
+
+    def _notice(self, message: str) -> None:
+        with self._lock:
+            self._notices.append(message)
+
+    # -- internals -----------------------------------------------------------------------
+
+    def _connection(self, ip: str) -> VectorConnection:
+        with self._lock:
+            connection = self._connections.get(ip)
+            if connection is None:
+                connection = self._connect_fn(ip, password=self.password)
+                connection.name = connection.name or self._machines.get(ip)
+                self._connections[ip] = connection
+            connection.machine.password = self.password
+            return connection
+
+    def _run(self) -> None:
+        next_discover = 0.0
+        while not self._stop.is_set():
+            self._process_enable_requests()
+            if time.monotonic() >= next_discover:
+                self._discover_once()
+                next_discover = time.monotonic() + DISCOVER_REST_INTERVAL
+            self._wake.wait(timeout=0.25)
+            self._wake.clear()
+
+    def _discover_once(self) -> None:
+        try:
+            found = self._discover_fn(timeout=self.discover_timeout)
+        except Exception as exc:
+            message = f"Discovery error: {exc}"
+            if message != self._last_discovery_error:  # don't spam every round
+                self._last_discovery_error = message
+                self._notice(message)
+            return
+        self._last_discovery_error = None
+        with self._lock:
+            for machine in found:
+                if machine.ip not in self._machines:
+                    self._notice(f"Discovered {machine.name} ({machine.ip})")
+                self._machines[machine.ip] = machine.name
+
+    def _process_enable_requests(self) -> None:
+        with self._lock:
+            pending = [
+                ip for ip, (state, _) in self._enable_state.items()
+                if state == "pending"
+            ]
+        for ip in pending:
+            if self._stop.is_set():
+                return
+            label = self.label(ip)
+            if not self.has_password():
+                with self._lock:
+                    self._enable_state[ip] = ("failed", self._password_generation)
+                self._notice(
+                    f"Password needed to enable the memory broadcast on {label}"
+                )
+                continue
+            try:
+                self._connection(ip).enable_broadcast(self.frequency_ms)
+            except Exception as exc:
+                with self._lock:
+                    self._enable_state[ip] = ("failed", self._password_generation)
+                self._notice(
+                    f"Could not enable memory broadcast on {label}: {exc}"
+                )
+            else:
+                with self._lock:
+                    self._enable_state[ip] = ("enabled", self._password_generation)
+                self._notice(f"Enabled memory broadcast on {label}")

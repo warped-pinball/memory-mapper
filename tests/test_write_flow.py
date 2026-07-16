@@ -47,12 +47,53 @@ class RecordingWriter:
         self.calls.append((offset, list(values)))
 
 
-def make_display(writer=None, snapshot=b"\x00\x01\x02\x03"):
+class StubManager:
+    """Minimal stand-in for vector.VectorManager in display tests."""
+
+    def __init__(self, machines=None, password=None):
+        self._machines = dict(machines or {})
+        self._password = password
+        self.set_password_calls = []
+        self.enable_requests = []
+        self.notices = []
+
+    def machines(self):
+        return dict(self._machines)
+
+    def machine_name(self, ip):
+        return self._machines.get(ip)
+
+    def label(self, ip):
+        name = self._machines.get(ip)
+        return f"{name} ({ip})" if name else ip
+
+    def pick_target(self):
+        return next(iter(self._machines), None)
+
+    def has_password(self):
+        return bool(self._password)
+
+    def set_password(self, password):
+        self._password = password
+        self.set_password_calls.append(password)
+
+    def request_enable(self, ip):
+        self.enable_requests.append(ip)
+
+    def pop_notices(self):
+        notices, self.notices = self.notices, []
+        return notices
+
+
+def make_display(writer=None, snapshot=b"\x00\x01\x02\x03", manager=None):
     tracker = MemoryTracker()
     if snapshot is not None:
         tracker.update(snapshot, sender="10.0.0.5")
     return MemoryDisplay(
-        tracker, writer=writer, machine_label="elvira (10.0.0.5)"
+        tracker,
+        writer=writer,
+        machine_label="elvira (10.0.0.5)",
+        manager=manager,
     )
 
 
@@ -143,3 +184,84 @@ class TestWriteFlow:
         # "q" is buffered input during a write, not a quit command...
         assert display.write_stage == "value"
         assert display.write_buffer == "q"
+
+
+class TestPasswordFlow:
+    def test_background_tick_prompts_when_password_needed(self):
+        manager = StubManager(machines={"10.0.0.5": "elvira"})
+        display = make_display(manager=manager, snapshot=None)
+        assert display._background_tick() is True
+        assert display.password_stage == "input"
+        # A second tick doesn't re-open or re-prompt.
+        display.password_stage = None
+        display._last_tick = 0.0
+        display._background_tick()
+        assert display.password_stage is None
+
+    def test_background_tick_requests_enable_with_password(self):
+        manager = StubManager(machines={"10.0.0.5": "elvira"}, password="pw")
+        display = make_display(manager=manager, snapshot=None)
+        display._background_tick()
+        assert manager.enable_requests == ["10.0.0.5"]
+        assert display.password_stage is None
+
+    def test_background_tick_idle_once_data_flows(self):
+        manager = StubManager(machines={"10.0.0.5": "elvira"})
+        display = make_display(manager=manager)  # snapshot -> packet received
+        display._background_tick()
+        assert display.password_stage is None
+        assert manager.enable_requests == []
+
+    def test_notices_surface_in_status(self):
+        manager = StubManager(machines={"10.0.0.5": "elvira"}, password="pw")
+        manager.notices.append("Discovered elvira (10.0.0.5)")
+        display = make_display(manager=manager)
+        assert display._background_tick() is True
+        assert display.status_message == "Discovered elvira (10.0.0.5)"
+
+    def test_password_entry_sets_password_and_enables(self):
+        manager = StubManager(machines={"10.0.0.5": "elvira"})
+        display = make_display(manager=manager, snapshot=None)
+        display._background_tick()
+        send_keys(display, list("hunter2") + ["\r"])
+        assert manager.set_password_calls == ["hunter2"]
+        assert manager.enable_requests == ["10.0.0.5"]
+        assert display.password_stage is None
+
+    def test_password_escape_skips(self):
+        manager = StubManager(machines={"10.0.0.5": "elvira"})
+        display = make_display(manager=manager, snapshot=None)
+        display._background_tick()
+        send_keys(display, ["\x1b"])
+        assert display.password_stage is None
+        assert manager.set_password_calls == []
+        assert "press P" in display.status_message
+
+    def test_p_key_reopens_prompt(self):
+        manager = StubManager(machines={"10.0.0.5": "elvira"})
+        display = make_display(manager=manager)
+        send_keys(display, ["p"])
+        assert display.password_stage == "input"
+
+    def test_write_prompts_for_password_then_continues(self):
+        manager = StubManager(machines={"10.0.0.5": "elvira"})
+        writer = RecordingWriter()
+        display = make_display(writer=writer, manager=manager)
+        send_keys(display, ["w"])
+        assert display.password_stage == "input"
+        assert display.write_stage is None
+        send_keys(display, list("pw") + ["\r"])
+        assert manager.set_password_calls == ["pw"]
+        assert display.write_stage == "value"
+        send_keys(display, ["7", "\r", "y"])
+        assert writer.calls == [(0, [7])]
+
+    def test_password_panel_masks_input(self):
+        manager = StubManager(machines={"10.0.0.5": "elvira"})
+        display = make_display(manager=manager)
+        send_keys(display, ["p", "a", "b", "c"])
+        panel = display._render_password_panel()
+        text = panel.renderable.plain
+        assert "abc" not in text
+        assert "•••" in text
+        assert "elvira (10.0.0.5)" in text
