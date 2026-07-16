@@ -290,6 +290,13 @@ class VectorManager:
             state = self._enable_state.get(ip)
             return state is not None and state[0] == "enabled"
 
+    def enable_status(self, ip: str) -> Optional[str]:
+        """Streaming state for *ip*: "pending", "enabled", "failed", or None
+        (never asked)."""
+        with self._lock:
+            state = self._enable_state.get(ip)
+            return state[0] if state is not None else None
+
     # -- memory writes ----------------------------------------------------------------
 
     def write(self, ip: str, offset: int, values: Sequence[int]) -> None:

@@ -103,6 +103,23 @@ def _source_label(ip: str, source_names) -> str:
     return f"{name}({ip})" if name else ip
 
 
+# Per-source streaming state -> (menu label color, waiting-screen wording).
+SOURCE_STATUS_STYLES = {
+    "streaming": ("bright_green", "streaming"),
+    "starting": ("yellow", "starting…"),
+    "failed": ("bright_red", "failed — check password (P)"),
+    "off": ("dim", "not streaming"),
+}
+
+
+def _styled_source_label(source: str, source_names, source_status) -> str:
+    """Markup for one source, colored by its streaming status."""
+    label = _source_label(source, source_names)
+    status = (source_status or {}).get(source)
+    color = SOURCE_STATUS_STYLES.get(status, (None, None))[0]
+    return f"[{color}]{label}[/{color}]" if color else label
+
+
 def _render_menu(
     tracker: MemoryTracker,
     selected_source: Optional[str],
@@ -112,6 +129,7 @@ def _render_menu(
     compact: bool = False,
     source_names=None,
     sources=None,
+    source_status=None,
 ):
     senders = tracker.known_senders()
     listed_sources = sources if sources is not None else senders
@@ -121,14 +139,17 @@ def _render_menu(
     menu.add_column(ratio=5)
     menu.add_column(ratio=3)
 
+    if source_status is None:
+        # No manager: everything listed is an active sender.
+        source_status = {ip: "streaming" for ip in senders}
+
     sender_bits = ["[bold]Sources:[/bold]"]
     for idx, source in enumerate(listed_sources[:9], start=1):
-        label = _source_label(source, source_names)
+        label = _styled_source_label(source, source_names, source_status)
         if source == selected_source:
-            sender_bits.append(f"[bold bright_blue]{idx}[/bold bright_blue]:{label}*")
-        elif source not in senders:
-            # Discovered on the network but not (yet) broadcasting to us.
-            sender_bits.append(f"[bright_blue]{idx}[/bright_blue]:[dim]{label}[/dim]")
+            sender_bits.append(
+                f"[bold bright_blue]{idx}[/bold bright_blue]:{label}[bold]*[/bold]"
+            )
         else:
             sender_bits.append(f"[bright_blue]{idx}[/bright_blue]:{label}")
 
@@ -328,6 +349,7 @@ def render_snapshot(
     compact: bool = False,
     source_names=None,
     sources=None,
+    source_status=None,
 ):
     snapshot = tracker.snapshot
 
@@ -338,13 +360,32 @@ def render_snapshot(
     )
 
     if snapshot is None:
-        waiting = "Waiting for data…"
-        if source_names:
-            discovered = ", ".join(
-                f"{name} ({ip})" for ip, name in list(source_names.items())[:5]
+        listed = sources if sources is not None else tracker.known_senders()
+        if listed:
+            lines = ["[grey50]Waiting for data…[/grey50]", ""]
+            lines.append("[bold]Vector machines on your network:[/bold]")
+            for idx, ip in enumerate(listed[:9], start=1):
+                name = (source_names or {}).get(ip)
+                status = (source_status or {}).get(ip, "off")
+                color, wording = SOURCE_STATUS_STYLES.get(
+                    status, ("dim", status or "unknown")
+                )
+                machine = f"{name}  {ip}" if name else ip
+                lines.append(
+                    f"[bright_blue]{idx}[/bright_blue]  {machine}  "
+                    f"[{color}]● {wording}[/{color}]"
+                )
+            lines.append("")
+            lines.append(
+                "[grey50]Press a machine's number to start streaming from it[/grey50]"
             )
-            waiting += f"\nDiscovered machines: {discovered}"
-        body = Text(waiting, style=DIM_STYLE, justify="center")
+            body = Text.from_markup("\n".join(lines), justify="center")
+        else:
+            body = Text(
+                "Waiting for data…\nSearching the network for Vector machines…",
+                style=DIM_STYLE,
+                justify="center",
+            )
         memory_panel = Panel(body, title=title, border_style="bright_blue")
         parts: list = [memory_panel]
         if show_legend:
@@ -355,6 +396,7 @@ def render_snapshot(
                     tracker, selected_source, status_message,
                     ascii_mode=ascii_mode, bit_mode=bit_mode, compact=compact,
                     source_names=source_names, sources=sources,
+                    source_status=source_status,
                 )
             )
         else:
@@ -438,6 +480,7 @@ def render_snapshot(
                 tracker, selected_source, status_message,
                 ascii_mode=ascii_mode, bit_mode=bit_mode, compact=compact,
                 source_names=source_names, sources=sources,
+                source_status=source_status,
             )
         )
     else:
@@ -993,6 +1036,27 @@ class MemoryDisplay:
                     sources.append(ip)
         return sources
 
+    def _source_statuses(self, sources: List[str]) -> dict:
+        """Streaming status per source, for color-coding the UI."""
+        statuses = {}
+        for ip in sources:
+            if ip in self.tracker.sender_packet_counts:
+                statuses[ip] = "streaming"
+                continue
+            state = (
+                self.manager.enable_status(ip)
+                if self.manager is not None
+                else None
+            )
+            if state in ("pending", "enabled"):
+                # Asked (or already told) to stream, no packets yet.
+                statuses[ip] = "starting"
+            elif state == "failed":
+                statuses[ip] = "failed"
+            else:
+                statuses[ip] = "off"
+        return statuses
+
     def _select_source(self, source_number: int) -> None:
         sources = self._source_list()
         index = source_number - 1
@@ -1053,6 +1117,11 @@ class MemoryDisplay:
             compact=self.compact,
             source_names=self.manager.machines() if self.manager else None,
             sources=self._source_list() if self.manager else None,
+            source_status=(
+                self._source_statuses(self._source_list())
+                if self.manager
+                else None
+            ),
         )
         if self.password_stage is not None:
             return Group(base, self._render_password_panel())

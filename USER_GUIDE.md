@@ -290,9 +290,16 @@ the other.
 ## Switching sources
 
 The menu's `Sources:` line lists every machine on your network, numbered `1`
-through `9`, by name — both the ones actively streaming to you and the ones
-discovery found that are still silent (shown dimmed). Press the matching
-number key to switch.
+through `9`, by name and IP, color-coded by streaming state:
+
+- **Green** — streaming to you right now.
+- **Yellow** — asked to start streaming; waiting for the first packets.
+- **Red** — the start-streaming request failed (usually a wrong password —
+  press `P` to re-enter it).
+- **Dim** — discovered on the network but not streaming.
+
+Before any data arrives, the main panel shows this same machine list with
+each machine's status spelled out. Press the matching number key to switch.
 
 Selecting a machine that isn't streaming yet automatically sends it an
 authenticated request to start streaming to this computer (prompting for the

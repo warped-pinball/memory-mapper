@@ -50,9 +50,10 @@ class RecordingWriter:
 class StubManager:
     """Minimal stand-in for vector.VectorManager in display tests."""
 
-    def __init__(self, machines=None, password=None):
+    def __init__(self, machines=None, password=None, enable_states=None):
         self._machines = dict(machines or {})
         self._password = password
+        self.enable_states = dict(enable_states or {})
         self.set_password_calls = []
         self.enable_requests = []
         self.notices = []
@@ -79,6 +80,10 @@ class StubManager:
 
     def request_enable(self, ip, force=False):
         self.enable_requests.append(ip)
+        self.enable_states[ip] = "pending"
+
+    def enable_status(self, ip):
+        return self.enable_states.get(ip)
 
     def pop_notices(self):
         notices, self.notices = self.notices, []
@@ -297,6 +302,44 @@ class TestPasswordFlow:
         assert manager.enable_requests == []
         send_keys(display, ["1"])  # re-select: restart the stream
         assert manager.enable_requests == ["10.0.0.5"]
+
+    def test_source_statuses(self):
+        manager = StubManager(
+            machines={
+                "10.0.0.5": "elvira",
+                "10.0.0.6": "taxi",
+                "10.0.0.7": "comet",
+                "10.0.0.8": "fish",
+            },
+            enable_states={"10.0.0.6": "pending", "10.0.0.7": "failed"},
+        )
+        display = make_display(manager=manager)  # 10.0.0.5 has sent packets
+        statuses = display._source_statuses(display._source_list())
+        assert statuses == {
+            "10.0.0.5": "streaming",
+            "10.0.0.6": "starting",
+            "10.0.0.7": "failed",
+            "10.0.0.8": "off",
+        }
+
+    def test_waiting_screen_lists_machines_with_status(self):
+        from memory_mapper.display import render_snapshot
+        from rich.console import Console
+        import io
+
+        manager = StubManager(
+            machines={"10.0.0.5": "elvira", "10.0.0.6": "taxi"},
+            enable_states={"10.0.0.6": "failed"},
+        )
+        display = make_display(manager=manager, snapshot=None)
+        console = Console(file=io.StringIO(), width=100, legacy_windows=False)
+        console.print(display._render())
+        output = console.file.getvalue()
+        assert "elvira" in output and "10.0.0.5" in output
+        assert "taxi" in output and "10.0.0.6" in output
+        assert "not streaming" in output
+        assert "failed" in output
+        assert "Press a machine's number" in output
 
     def test_selecting_out_of_range_source(self):
         manager = StubManager(machines={"10.0.0.5": "elvira"})
