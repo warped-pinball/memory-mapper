@@ -91,15 +91,31 @@ class TestVectorConnection:
                 super().__init__()
                 self.toggles = []
 
-            def set_memory_broadcast(self, enabled, frequency_ms=100):
-                self.toggles.append((enabled, frequency_ms))
+            def set_memory_broadcast(self, enabled, frequency_ms=100, ip=None):
+                self.toggles.append((enabled, frequency_ms, ip))
 
         machine = WrapperMachine()
         conn = VectorConnection(machine, ip="10.0.0.5")
         conn.enable_broadcast(frequency_ms=250)
+        conn.enable_broadcast(frequency_ms=250, ip="192.168.1.20")
         conn.disable_broadcast()
-        assert machine.toggles == [(True, 250), (False, 100)]
+        assert machine.toggles == [
+            (True, 250, None),
+            (True, 250, "192.168.1.20"),
+            (False, 100, None),
+        ]
         assert machine.calls == []  # raw route fallback never used
+
+    def test_enable_raw_route_includes_ip_when_given(self):
+        conn, machine = self._connection()
+        conn.enable_broadcast(frequency_ms=100, ip="192.168.1.20")
+        assert machine.calls == [
+            (
+                TOGGLE_BROADCAST_ROUTE,
+                {"enable": True, "frequency_ms": 100, "ip": "192.168.1.20"},
+                True,
+            )
+        ]
 
     def test_write_memory_passes_through(self):
         conn, machine = self._connection()

@@ -1,6 +1,6 @@
 # Memory Mapper — User Guide
 
-Memory Mapper is a live, terminal-based viewer for memory snapshots broadcast
+Memory Mapper is a live, terminal-based viewer for memory snapshots streamed
 from a Warped Pinball **Vector** board. It shows the raw bytes of the machine's
 memory as they change in real time, so you can hunt for the addresses that
 drive scores, balls, game state, and anything else you want to inspect.
@@ -10,23 +10,24 @@ drive scores, balls, game state, and anything else you want to inspect.
 ## Before you start
 
 Memory Mapper continuously looks for Vector boards on your network in the
-background and turns on the memory broadcast for you — no need to touch the
-Vector web UI. You just need two things:
+background and asks the board to stream its memory **directly to your
+computer** (UDP to port `2040` on this machine only — nothing is broadcast
+across the network). You just need two things:
 
 1. The computer running `memory-mapper` must be on the **same local network**
-   as Vector. Discovery and the memory stream are UDP broadcast traffic
-   (`239.255.0.0:2040` by default) and will not cross routers, VPNs, or
-   guest-Wi-Fi isolation.
-2. The **Vector password**, because enabling the broadcast (and writing to
+   as Vector. Machine discovery uses UDP broadcast (port `37020`), which will
+   not cross routers, VPNs, or guest-Wi-Fi isolation.
+2. The **Vector password**, because starting the stream (and writing to
    memory) are authenticated operations. The app prompts for it the first
    time it's needed; you can also pass `--password`, set the
    `$VECTOR_PASSWORD` environment variable, or press `P` in the app at any
    time.
 
-If you'd rather flip the **"Broadcast Memory Snapshots on Vector"** toggle in
-the Vector web UI yourself, run with `--listen-only`; the tool then behaves as
-a pure listener and never touches the machine (memory writes are unavailable
-in this mode).
+Starting the stream is API-only — there is no toggle in the Vector web UI.
+If something else is starting the stream for you (another tool, your own
+script, or a machine on legacy broadcast firmware), run with `--listen-only`;
+the tool then behaves as a pure listener and never touches the machine
+(memory writes are unavailable in this mode).
 
 ---
 
@@ -71,10 +72,10 @@ background:
 2. When a machine is found, asks for its password in the app (skipped if
    `--password` or `$VECTOR_PASSWORD` is set — press `Esc` to stay a passive
    listener, and `P` later if you change your mind).
-3. Enables the memory broadcast on the machine and starts showing memory
-   live.
+3. Asks the machine to stream its memory directly to this computer and
+   starts showing it live.
 
-When you quit (`Q` or Ctrl-C), any broadcast the tool enabled is turned back
+When you quit (`Q` or Ctrl-C), any stream the tool started is turned back
 off unless you pass `--keep-broadcasting`.
 
 If several machines are on the network, focus on one:
@@ -99,14 +100,15 @@ usage: memory-mapper [-h] [--version] [--machine NAME_OR_IP]
   --password PASSWORD           Vector password (falls back to
                                 $VECTOR_PASSWORD; otherwise the app prompts
                                 when it's needed)
-  --frequency-ms MS             How often the machine broadcasts snapshots
+  --frequency-ms MS             How often the machine sends snapshots
                                 (default: 100, clamped to 10-60000)
   --discover-timeout SECONDS    How long each background discovery round
                                 listens (default: 5)
   --listen-only                 Pure listener mode; never discover or control
                                 machines
-  --keep-broadcasting           Leave the broadcast enabled on exit
-  --group GROUP                 Multicast group to join (default: 239.255.0.0)
+  --keep-broadcasting           Leave the memory stream running on exit
+  --group GROUP                 Legacy multicast group to also join
+                                (default: 239.255.0.0)
   --port PORT                   UDP port to listen on (default: 2040)
   --highlight-duration SECONDS  How long changed bytes stay highlighted
                                 (default: 3.0)
@@ -288,49 +290,49 @@ the other.
 ## Switching sources
 
 The menu's `Sources:` line lists every machine on your network, numbered `1`
-through `9`, by name — both the ones actively broadcasting and the ones
+through `9`, by name — both the ones actively streaming to you and the ones
 discovery found that are still silent (shown dimmed). Press the matching
 number key to switch.
 
-Selecting a machine that isn't broadcasting yet automatically sends it an
-authenticated request to start broadcasting (prompting for the password first
-if one hasn't been entered). Switching sources resets the tracker so you're
-not mixing state from two different boards.
+Selecting a machine that isn't streaming yet automatically sends it an
+authenticated request to start streaming to this computer (prompting for the
+password first if one hasn't been entered). Switching sources resets the
+tracker so you're not mixing state from two different boards.
 
 ---
 
 ## Troubleshooting
 
 **Nothing appears, it just says "Waiting for data…".**
-Make sure your computer is on the same local network as Vector — the memory
-stream is UDP broadcast traffic and does not cross routers, VPNs, or Wi-Fi
-client isolation. In `--listen-only` mode, also check that **"Broadcast
-Memory Snapshots on Vector"** is enabled in the Vector web UI.
+Make sure your computer is on the same local network as Vector, the machine
+was discovered (its name shows on the waiting screen), and the password was
+accepted — the status line reports when the stream is requested and started.
+A firewall on this computer blocking inbound UDP port 2040 will also stop
+data from arriving.
 
 **No machines are being discovered.**
-Discovery uses UDP broadcast on port 37020 and needs the same-subnet rules as
-above. The tool keeps retrying in the background, so a machine that boots up
-later will still be found. If discovery can't work on your network, enable
-the broadcast in the Vector web UI and the tool will pick up the data anyway.
+Discovery uses UDP broadcast on port 37020, which does not cross routers,
+VPNs, or Wi-Fi client isolation. The tool keeps retrying in the background,
+so a machine that boots up later will still be found.
 
 **Status says "Could not enable memory broadcast…".**
 The password was wrong, or the machine was unreachable. Press `P` to re-enter
 the password (the tool retries automatically). If the machine's firmware is
-too old to support the broadcast toggle route, update it, or enable the
-toggle in the Vector web UI instead.
+too old to support the streaming route, update the firmware.
 
 **The `Sources:` list is empty.**
 No packets have been received yet. Same causes as above — the tool hasn't
 seen anything on the wire.
 
 **The Rate / Refresh values are zero.**
-Vector has stopped broadcasting, or the network dropped the multicast stream.
-Toggle the broadcast setting off and on again in the Vector UI.
+Vector has stopped streaming (a reboot stops it, for example), or the network
+dropped the packets. Re-select the machine from the `Sources:` list to send
+a fresh start-streaming request.
 
 **The view is cramped / wraps awkwardly.**
 Resize your terminal wider. Memory Mapper auto-expands the bytes-per-row to
 fit the available width.
 
 **I'm on a different subnet than Vector.**
-Move onto the same LAN. Memory Mapper uses UDP multicast, which is not
+Move onto the same LAN. Machine discovery uses UDP broadcast, which is not
 designed to be routed.

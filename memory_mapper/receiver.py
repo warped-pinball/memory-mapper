@@ -22,11 +22,15 @@ def create_socket(group: str, port: int) -> socket.socket:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         except OSError:
             pass
-    # Bind to all interfaces (required for multicast on most platforms).
-    # We use INADDR_ANY so the kernel routes multicast traffic to this socket
-    # regardless of which interface it arrives on.
+    # Bind to all interfaces. Current firmware unicasts the memory stream
+    # straight to this host, which this socket receives on any interface.
     sock.bind(("0.0.0.0", port))
-    _join_multicast_group(sock, group)
+    # Joining the legacy multicast group keeps older firmware (which
+    # broadcast instead of unicasting) working; not fatal if it fails.
+    try:
+        _join_multicast_group(sock, group)
+    except OSError:
+        pass
     return sock
 
 

@@ -1000,6 +1000,7 @@ class MemoryDisplay:
             self.status_message = f"Source {source_number} is unavailable"
             return
         new_source = sources[index]
+        was_selected = new_source == self.selected_source
         label = (
             self.manager.label(new_source)
             if self.manager is not None
@@ -1017,11 +1018,16 @@ class MemoryDisplay:
             self.status_message = f"Selected source {source_number}: {label}"
 
         # A discovered machine we've never heard a packet from isn't
-        # broadcasting yet — ask it to start (which needs the password).
+        # streaming yet — ask it to start (which needs the password).
+        # Re-selecting the current machine also re-sends the request, as a
+        # way to restart a stream that stopped (e.g. after a reboot).
         needs_broadcast = (
             self.manager is not None
             and self.manager.machine_name(new_source) is not None
-            and new_source not in self.tracker.sender_packet_counts
+            and (
+                new_source not in self.tracker.sender_packet_counts
+                or was_selected
+            )
         )
         if needs_broadcast:
             if self.manager.has_password():

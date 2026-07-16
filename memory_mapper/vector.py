@@ -74,32 +74,42 @@ class VectorConnection:
     def verify_password(self) -> bool:
         return self.machine.verify_password()
 
-    def _set_broadcast(self, enabled: bool, frequency_ms: int) -> None:
-        """Toggle the broadcast, preferring the library wrapper when present.
+    def _set_broadcast(
+        self, enabled: bool, frequency_ms: int, ip: Optional[str] = None
+    ) -> None:
+        """Toggle the memory stream, preferring the library wrapper when present.
 
         warpedpinball gained Machine.set_memory_broadcast() after 0.1.1; on
         older versions fall back to calling the firmware route directly.
         """
         set_broadcast = getattr(self.machine, "set_memory_broadcast", None)
         if callable(set_broadcast):
-            set_broadcast(enabled, frequency_ms=frequency_ms)
+            set_broadcast(enabled, frequency_ms=frequency_ms, ip=ip)
             return
-        body = (
-            {"enable": True, "frequency_ms": clamp_frequency_ms(frequency_ms)}
-            if enabled
-            else {"enable": False}
-        )
+        if enabled:
+            body = {"enable": True, "frequency_ms": clamp_frequency_ms(frequency_ms)}
+            if ip is not None:
+                body["ip"] = ip
+        else:
+            body = {"enable": False}
         self.machine.call(TOGGLE_BROADCAST_ROUTE, body=body, authenticated=True)
 
     def enable_broadcast(
-        self, frequency_ms: int = DEFAULT_BROADCAST_FREQUENCY_MS
+        self,
+        frequency_ms: int = DEFAULT_BROADCAST_FREQUENCY_MS,
+        ip: Optional[str] = None,
     ) -> None:
-        """Turn on the UDP memory-snapshot broadcast (authenticated)."""
-        self._set_broadcast(True, frequency_ms)
+        """Start the UDP memory-snapshot stream (authenticated).
+
+        The firmware sends the stream to a single target: ``ip`` when given,
+        otherwise the address this request comes from — i.e. this machine,
+        which is where the receiver is listening.
+        """
+        self._set_broadcast(True, frequency_ms, ip=ip)
         self.broadcast_enabled = True
 
     def disable_broadcast(self) -> None:
-        """Turn the UDP memory-snapshot broadcast back off (authenticated)."""
+        """Stop the UDP memory-snapshot stream (authenticated)."""
         self._set_broadcast(False, DEFAULT_BROADCAST_FREQUENCY_MS)
         self.broadcast_enabled = False
 
@@ -254,14 +264,17 @@ class VectorManager:
     def request_enable(self, ip: str, force: bool = False) -> None:
         """Ask the worker to enable the memory broadcast on *ip* (deduped).
 
-        ``force`` retries even a machine that failed before with the same
-        password — used when the user explicitly selects a machine.
+        ``force`` re-sends even when the machine failed before with the same
+        password, or when we already enabled it (a reboot silently stops the
+        stream) — used when the user explicitly selects a machine.
         """
         with self._lock:
             state = self._enable_state.get(ip)
             if state is not None:
                 status, generation = state
-                if status in ("pending", "enabled"):
+                if status == "pending":
+                    return
+                if status == "enabled" and not force:
                     return
                 if (
                     status == "failed"

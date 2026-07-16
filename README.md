@@ -1,8 +1,8 @@
 # memory-mapper
 
 A cross-platform CLI tool that discovers Warped Pinball **Vector** boards on
-your network, enables their memory broadcast, and displays the live memory
-snapshots in the terminal, **highlighting recently-changed bytes** so you can
+your network, asks them to stream their memory directly to your computer, and
+displays the live memory snapshots in the terminal, **highlighting recently-changed bytes** so you can
 hunt down the addresses that drive scores, balls, game state, and anything
 else you want to inspect. Once you've found an address, you can also write
 values back to the machine's memory straight from the viewer.
@@ -62,11 +62,13 @@ memory-mapper
 ```
 
 The viewer starts immediately. In the background it continuously discovers
-Vector machines on your local network, and when one is found it enables the
-machine's memory broadcast for you — prompting for the Vector password in
-the app the first time it's needed (skip the prompt by passing `--password`
-or setting `$VECTOR_PASSWORD`). Memory then starts streaming in live. Press
-**Ctrl-C** or **Q** to exit; the broadcast is turned back off on the way out.
+Vector machines on your local network, and when one is found it asks the
+machine to stream its memory directly to this computer — prompting for the
+Vector password in the app the first time it's needed (skip the prompt by
+passing `--password` or setting `$VECTOR_PASSWORD`). Memory then starts
+streaming in live. Press **Ctrl-C** or **Q** to exit; the stream is turned
+back off on the way out. The machine sends only to this computer — nothing
+is broadcast across your network.
 
 To focus on a specific machine when several are on the network:
 
@@ -75,10 +77,11 @@ memory-mapper --machine elvira            # by LAN name (partial names work)
 memory-mapper --machine 192.168.1.50      # or by IP
 ```
 
-If you'd rather enable the broadcast yourself in the Vector web UI (the old
-workflow), run with `--listen-only`; the tool then just listens on multicast
-group `239.255.0.0` port `2040` without touching the machine. See the
-[User Guide](USER_GUIDE.md) for the full walkthrough and troubleshooting.
+If the stream is being started by something else (another tool, your own
+script, or a machine on legacy broadcast firmware), run with `--listen-only`;
+the tool then just listens on UDP port `2040` without touching the machine.
+See the [User Guide](USER_GUIDE.md) for the full walkthrough and
+troubleshooting.
 
 ## Usage
 
@@ -95,16 +98,17 @@ options:
   --version                     show program's version number and exit
   --machine NAME_OR_IP          Vector machine to focus on, by LAN name or IP
                                 (default: the first machine discovered)
-  --password PASSWORD           Vector password for enabling the broadcast and
-                                writing memory (falls back to $VECTOR_PASSWORD;
-                                otherwise the app prompts when it's needed)
-  --frequency-ms MS             How often the machine broadcasts snapshots
+  --password PASSWORD           Vector password for starting the memory stream
+                                and writing memory (falls back to
+                                $VECTOR_PASSWORD; otherwise the app prompts
+                                when it's needed)
+  --frequency-ms MS             How often the machine sends snapshots
                                 (default: 100, clamped to 10-60000)
   --discover-timeout SECONDS    How long each background discovery round listens
                                 (default: 5)
   --listen-only                 Never discover or control machines; just listen
-                                (enable the broadcast in the Vector web UI yourself)
-  --keep-broadcasting           Leave the broadcast enabled on the machine on exit
+                                (something else must start the stream)
+  --keep-broadcasting           Leave the memory stream running on exit
   --group GROUP                 Multicast group address to join (default: 239.255.0.0)
   --port PORT                   UDP port to listen on (default: 2040)
   --highlight-duration SECONDS  How long changed bytes stay highlighted (default: 3.0)

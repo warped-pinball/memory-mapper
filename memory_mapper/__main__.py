@@ -26,10 +26,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="memory-mapper",
         description=(
-            "Listen for UDP memory snapshots from Warped Pinball Vector "
-            "boards and display them in the terminal, highlighting "
-            "recently-changed bytes. Machines are discovered in the "
-            "background and their memory broadcast is enabled automatically."
+            "Display live memory snapshots from Warped Pinball Vector boards "
+            "in the terminal, highlighting recently-changed bytes. Machines "
+            "are discovered in the background and asked to stream their "
+            "memory directly to this computer."
         ),
     )
     parser.add_argument(
@@ -49,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--password",
         default=None,
         help=(
-            "Vector password, used to enable the memory broadcast and to "
+            "Vector password, used to start the memory stream and to "
             f"write memory (falls back to ${vector.PASSWORD_ENV_VAR}; "
             "otherwise the app prompts when it's needed)."
         ),
@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=vector.DEFAULT_BROADCAST_FREQUENCY_MS,
         metavar="MS",
         help=(
-            "How often (milliseconds) the machine broadcasts memory snapshots "
+            "How often (milliseconds) the machine sends memory snapshots "
             f"(default: {vector.DEFAULT_BROADCAST_FREQUENCY_MS}, clamped to "
             f"{vector.BROADCAST_FREQUENCY_MIN_MS}-{vector.BROADCAST_FREQUENCY_MAX_MS})"
         ),
@@ -79,15 +79,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--listen-only",
         action="store_true",
         help=(
-            "Never discover or control machines; just listen for broadcasts. "
-            "Enable the broadcast toggle in the Vector web UI yourself; "
-            "memory writes are unavailable."
+            "Never discover or control machines; just listen for incoming "
+            "snapshots (something else must start the machine's memory "
+            "stream). Memory writes are unavailable."
         ),
     )
     parser.add_argument(
         "--keep-broadcasting",
         action="store_true",
-        help="Leave the memory broadcast enabled on the machine when exiting.",
+        help="Leave the memory stream running on the machine when exiting.",
     )
     parser.add_argument(
         "--group",

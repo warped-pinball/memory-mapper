@@ -287,6 +287,17 @@ class TestPasswordFlow:
         assert display.selected_source == "10.0.0.5"
         assert manager.enable_requests == []
 
+    def test_reselecting_current_machine_rerequests_stream(self):
+        manager = StubManager(
+            machines={"10.0.0.5": "elvira"},
+            password="pw",
+        )
+        display = make_display(manager=manager)
+        send_keys(display, ["1"])  # active sender: no request on first select
+        assert manager.enable_requests == []
+        send_keys(display, ["1"])  # re-select: restart the stream
+        assert manager.enable_requests == ["10.0.0.5"]
+
     def test_selecting_out_of_range_source(self):
         manager = StubManager(machines={"10.0.0.5": "elvira"})
         display = make_display(manager=manager)
