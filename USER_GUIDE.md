@@ -183,6 +183,7 @@ be hidden independently so the hex dump gets as much room as possible:
 | `O` | Toggle the offset column and column-header row                      |
 | `U` | Toggle the cursor info panel                                        |
 | `V` | Toggle compact view (removes panel borders and padding)             |
+| `?` | Toggle the About overlay (tool and `warpedpinball` versions; `Esc` also closes it) |
 
 ### Exporting
 

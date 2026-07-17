@@ -27,6 +27,7 @@ from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 
+from . import __version__, vector
 from .tracker import MemoryTracker, SCAN_MODES, BIT_SCAN_MODES
 
 HIGHLIGHT_DURATION_MIN = 0.5
@@ -183,7 +184,8 @@ def _render_menu(
     )
     view_commands = (
         "[bold]View:[/bold] [cyan]M[/cyan] menu  [cyan]K[/cyan] legend  "
-        "[cyan]O[/cyan] offsets  [cyan]U[/cyan] cursor info  [cyan]V[/cyan] compact"
+        "[cyan]O[/cyan] offsets  [cyan]U[/cyan] cursor info  [cyan]V[/cyan] compact  "
+        "[cyan]?[/cyan] about"
     )
 
     metrics = (
@@ -216,6 +218,34 @@ def _render_legend(compact: bool = False):
     if compact:
         return legend
     return Panel(legend, border_style="bright_black", title="[bold]Legend[/bold]")
+
+
+def _render_about(compact: bool = False):
+    """Render the About panel showing tool and library versions."""
+    lib_version = vector.library_version()
+    lib_line = lib_version if lib_version else "not installed"
+
+    body = Text()
+    body.append("Memory Mapper\n", style="bold bright_cyan")
+    body.append("Live memory snapshot viewer for Warped Pinball Vector boards.\n\n")
+    body.append("memory-mapper version:  ", style="bold")
+    body.append(f"{__version__}\n")
+    body.append("warpedpinball library:  ", style="bold")
+    body.append(f"{lib_line}\n")
+    body.append("\nPress ", style="dim")
+    body.append("?", style="cyan")
+    body.append(" or ", style="dim")
+    body.append("Esc", style="cyan")
+    body.append(" to close.", style="dim")
+
+    if compact:
+        return body
+    return Panel(
+        body,
+        border_style="bright_cyan",
+        padding=(0, 1),
+        title="[bold]About[/bold]",
+    )
 
 
 def _render_status_bar(status_message: str) -> Text:
@@ -541,6 +571,7 @@ class MemoryDisplay:
         self.show_legend: bool = True
         self.show_menu: bool = True
         self.show_cursor_info: bool = True
+        self.show_about: bool = False
         self.compact: bool = False
         self._effective_bpr: int = bytes_per_row
 
@@ -651,6 +682,16 @@ class MemoryDisplay:
             return
         if self.write_stage is not None:
             self._handle_write_key(key)
+            return
+
+        # The About overlay is modal-ish: Esc closes it while it's open.
+        if self.show_about and key == "\x1b":
+            self.show_about = False
+            self.status_message = "About hidden"
+            return
+        if key == "?":
+            self.show_about = not self.show_about
+            self.status_message = f"About {'shown' if self.show_about else 'hidden'}"
             return
 
         if key in ("UP", "DOWN", "LEFT", "RIGHT"):
@@ -1123,6 +1164,8 @@ class MemoryDisplay:
                 else None
             ),
         )
+        if self.show_about:
+            return Group(base, _render_about(compact=self.compact))
         if self.password_stage is not None:
             return Group(base, self._render_password_panel())
         if self.write_stage is not None:

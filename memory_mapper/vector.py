@@ -33,6 +33,22 @@ class VectorUnavailableError(RuntimeError):
     """Raised when the warpedpinball library is not installed."""
 
 
+def library_version() -> Optional[str]:
+    """Return the installed ``warpedpinball`` version, or ``None`` if absent.
+
+    Prefers installed package metadata and falls back to the module's
+    ``__version__`` attribute so it works whether the library exposes one.
+    """
+    if warpedpinball is None:
+        return None
+    try:
+        import importlib.metadata as importlib_metadata
+
+        return importlib_metadata.version("warpedpinball")
+    except Exception:
+        return getattr(warpedpinball, "__version__", None)
+
+
 def _require_library():
     if warpedpinball is None:
         raise VectorUnavailableError(
