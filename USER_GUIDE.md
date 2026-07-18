@@ -128,7 +128,8 @@ usage: memory-mapper [-h] [--version] [--machine NAME_OR_IP]
 │ 0000  00 01 02 03 04 FF 06 07 08 09 0A ...    │
 │ 0010  AB 11 12 13 14 15 16 17 18 19 1A ...    │
 │  ...                                          │
-└── Packets 123  Size 256B  Highlight 3.0s  ────┘
+└─ Rate 9.8/s  Refresh 4.0 Hz  Age 0.1s  Hard 2 ┘
+   Soft 1/0  Steps 3  Packets 123  Size 256B ...
 ┌──────────────── Cursor ───────────────────────┐
 │  Addr: 0x0005 (5)  Hex: 0xFF  Dec: 255        │
 │  Bin: 11111111  ASCII: ·                      │
@@ -147,7 +148,10 @@ usage: memory-mapper [-h] [--version] [--machine NAME_OR_IP]
 ```
 
 - **Memory panel** — a classic hex dump. A yellow background means the byte
-  changed within the last few seconds.
+  changed within the last few seconds. Its bottom border carries the live data
+  stats — packet rate, refresh rate (Hz), data age, scan match counts (Hard /
+  Soft), packets, size, and marked count — so they stay visible even when the
+  menu is hidden (in compact view the same line is printed under the hex).
 - **Cursor panel** — details for the byte under the cursor: address, hex,
   decimal, binary, ASCII, and recent value history.
 - **Legend** — the meaning of every highlight color.

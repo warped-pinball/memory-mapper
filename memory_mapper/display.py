@@ -176,6 +176,33 @@ def _render_sources_panel(
     )
 
 
+def _stats_summary(tracker: MemoryTracker, bit_mode: bool = False) -> str:
+    """One-line live data stats shown in the memory panel's bottom border.
+
+    Leads with the live-rate and scan-match stats (the numbers users watch)
+    so they survive if a narrow terminal truncates the border text.
+    """
+    stats = tracker.bit_scan_stats() if bit_mode else tracker.scan_stats()
+    pps = tracker.packets_per_second()
+    hertz = tracker.refreshes_per_second()
+    age = tracker.data_age_seconds()
+    age_text = "—" if age is None else f"{age:.1f}s"
+    size = len(tracker.snapshot) if tracker.snapshot is not None else 0
+    marked = len(tracker.marked_addresses)
+    return (
+        f"[dim]Rate[/dim] [bold]{pps:.1f}/s[/bold]  "
+        f"[dim]Refresh[/dim] [bold]{hertz:.2f} Hz[/bold]  "
+        f"[dim]Age[/dim] [bold]{age_text}[/bold]  "
+        f"[dim]Hard[/dim] [bold]{stats.hard_match_count}[/bold]  "
+        f"[dim]Soft[/dim] [bold]{stats.soft_match_count_1}/{stats.soft_match_count_2}[/bold]  "
+        f"[dim]Steps[/dim] [bold]{stats.steps}[/bold]  "
+        f"[dim]Packets[/dim] [bold]{tracker.packet_count}[/bold]  "
+        f"[dim]Size[/dim] [bold]{size}B[/bold]  "
+        f"[dim]Highlight[/dim] [bold]{tracker.highlight_duration:.1f}s[/bold]  "
+        f"[dim]Marked[/dim] [bold]{marked}[/bold]"
+    )
+
+
 def _render_menu(
     tracker: MemoryTracker,
     selected_source: Optional[str],
@@ -189,7 +216,6 @@ def _render_menu(
 ):
     senders = tracker.known_senders()
     listed_sources = sources if sources is not None else senders
-    stats = tracker.bit_scan_stats() if bit_mode else tracker.scan_stats()
 
     menu = Table.grid(expand=True)
     menu.add_column(ratio=5)
@@ -210,10 +236,6 @@ def _render_menu(
             sender_bits.append(f"[bright_blue]{idx}[/bright_blue]:{label}")
 
     filter_label = selected_source or "(waiting for first source)"
-    pps = tracker.packets_per_second()
-    hertz = tracker.refreshes_per_second()
-    age = tracker.data_age_seconds()
-    age_text = "—" if age is None else f"{age:.1f}s"
 
     mode_label = "[bright_green]BIT[/bright_green]" if bit_mode else "BYTE"
 
@@ -243,12 +265,9 @@ def _render_menu(
         "[cyan]S[/cyan] sources  [cyan]?[/cyan] about"
     )
 
-    metrics = (
-        f"[bold]Selected:[/bold] {filter_label}  [bold]Rate:[/bold] {pps:.1f} pkt/s  "
-        f"[bold]Refresh:[/bold] {hertz:.2f} Hz  [bold]Age:[/bold] {age_text}\n"
-        f"[bold]Steps:[/bold] {stats.steps}  [bold]Hard:[/bold] {stats.hard_match_count}  "
-        f"[bold]Soft(1 miss):[/bold] {stats.soft_match_count_1}  [bold]Soft(2 misses):[/bold] {stats.soft_match_count_2}"
-    )
+    # Live data stats (rate, Hz, matches) now live in the memory panel's
+    # bottom border via _stats_summary; the menu keeps just the active source.
+    metrics = f"[bold]Selected:[/bold] {filter_label}"
 
     menu.add_row(" ".join(sender_bits), metrics)
     menu.add_row(scan_commands, "")
@@ -549,15 +568,12 @@ def render_snapshot(
                 )
         memory_text.append(line)
 
-    marked_count = len(tracker.marked_addresses)
-    status = (
-        f"[dim]Packets[/dim] [bold]{tracker.packet_count}[/bold]  "
-        f"[dim]Size[/dim] [bold]{size}B[/bold]  "
-        f"[dim]Highlight[/dim] [bold]{tracker.highlight_duration:.1f}s[/bold]  "
-        f"[dim]Marked[/dim] [bold]{marked_count}[/bold]"
-    )
+    status = _stats_summary(tracker, bit_mode=bit_mode)
 
     if compact:
+        # No border to carry a subtitle in compact mode, so append the stats
+        # as a trailing line under the hex instead.
+        memory_text.append(Text.from_markup("\n" + status))
         memory_renderable: Union[Text, Panel] = memory_text
     else:
         memory_renderable = Panel(

@@ -698,6 +698,22 @@ class TestViewToggles:
         assert "Scan:" not in output
         assert "hello there" in output
 
+    def test_stats_shown_in_border_even_with_menu_hidden(self):
+        # The live data stats live in the memory panel border, not the menu,
+        # so they stay visible when the menu is hidden.
+        t = MemoryTracker()
+        t.update(b"\x00\x01")
+        output = self._render_text(t, show_menu=False)
+        assert "Scan:" not in output  # menu really is hidden
+        for label in ("Rate", "Refresh", "Hz", "Hard", "Soft"):
+            assert label in output
+
+    def test_stats_shown_in_compact_mode(self):
+        t = MemoryTracker()
+        t.update(b"\x00\x01")
+        output = self._render_text(t, compact=True, show_menu=False, show_legend=False)
+        assert "Rate" in output and "Hz" in output and "Hard" in output
+
     def test_hide_legend(self):
         t = MemoryTracker()
         t.update(b"\x00\x01")
