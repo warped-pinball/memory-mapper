@@ -1,9 +1,15 @@
 # memory-mapper
 
-A cross-platform CLI tool that listens for UDP multicast memory snapshots from a
-Warped Pinball **Vector** board and displays them live in the terminal,
-**highlighting recently-changed bytes** so you can hunt down the addresses that
-drive scores, balls, game state, and anything else you want to inspect.
+A cross-platform CLI tool that discovers Warped Pinball **Vector** boards on
+your network, asks them to stream their memory directly to your computer, and
+displays the live memory snapshots in the terminal, **highlighting recently-changed bytes** so you can
+hunt down the addresses that drive scores, balls, game state, and anything
+else you want to inspect. Once you've found an address, you can also write
+values back to the machine's memory straight from the viewer.
+
+Machine discovery, authentication, and memory writes are handled by the
+[warpedpinball](https://github.com/warped-pinball/python-library) Python
+library.
 
 ## Screenshots
 
@@ -55,25 +61,54 @@ memory-mapper
 memory-mapper
 ```
 
-By default the tool joins multicast group `239.255.0.0` on port `2040`, waits
-for the first packet from Vector, and starts showing memory live. Press
-**Ctrl-C** to exit.
+The viewer starts immediately. In the background it continuously discovers
+Vector machines on your local network, and when one is found it asks the
+machine to stream its memory directly to this computer — prompting for the
+Vector password in the app the first time it's needed (skip the prompt by
+passing `--password` or setting `$VECTOR_PASSWORD`). Memory then starts
+streaming in live. Press **Ctrl-C** or **Q** to exit; the stream is turned
+back off on the way out. The machine sends only to this computer — nothing
+is broadcast across your network.
 
-Vector has to be actively broadcasting for anything to appear — enable the
-**"Broadcast Memory Snapshots on Vector"** toggle in the Vector web UI, and make
-sure your computer is on the same local network. See the
-[User Guide](USER_GUIDE.md) for the full walkthrough and troubleshooting.
+To focus on a specific machine when several are on the network:
+
+```bash
+memory-mapper --machine elvira            # by LAN name (partial names work)
+memory-mapper --machine 192.168.1.50      # or by IP
+```
+
+If the stream is being started by something else (another tool, your own
+script, or a machine on legacy broadcast firmware), run with `--listen-only`;
+the tool then just listens on UDP port `2040` without touching the machine.
+See the [User Guide](USER_GUIDE.md) for the full walkthrough and
+troubleshooting.
 
 ## Usage
 
 ```
-usage: memory-mapper [-h] [--version] [--group GROUP] [--port PORT]
+usage: memory-mapper [-h] [--version] [--machine NAME_OR_IP]
+                     [--password PASSWORD] [--frequency-ms MS]
+                     [--discover-timeout SECONDS] [--listen-only]
+                     [--keep-broadcasting] [--group GROUP] [--port PORT]
                      [--highlight-duration SECONDS] [--bytes-per-row N]
                      [--source-filter IP]
 
 options:
   -h, --help                    show this help message and exit
   --version                     show program's version number and exit
+  --machine NAME_OR_IP          Vector machine to focus on, by LAN name or IP
+                                (default: the first machine discovered)
+  --password PASSWORD           Vector password for starting the memory stream
+                                and writing memory (falls back to
+                                $VECTOR_PASSWORD; otherwise the app prompts
+                                when it's needed)
+  --frequency-ms MS             How often the machine sends snapshots
+                                (default: 100, clamped to 10-60000)
+  --discover-timeout SECONDS    How long each background discovery round listens
+                                (default: 5)
+  --listen-only                 Never discover or control machines; just listen
+                                (something else must start the stream)
+  --keep-broadcasting           Leave the memory stream running on exit
   --group GROUP                 Multicast group address to join (default: 239.255.0.0)
   --port PORT                   UDP port to listen on (default: 2040)
   --highlight-duration SECONDS  How long changed bytes stay highlighted (default: 3.0)
@@ -85,7 +120,9 @@ options:
 Once running, single-key commands let you navigate the memory map, inspect
 individual bytes, and iteratively filter offsets by how each byte changed
 (changed, unchanged, increased, decreased, and bit-level variants) to track down
-the values you care about. The [User Guide](USER_GUIDE.md) documents every
+the values you care about. Press **W** to write value(s) to memory at the
+cursor — every write shows the details and a warning first, and nothing is
+sent until you confirm. The [User Guide](USER_GUIDE.md) documents every
 keyboard control and walks through the scan workflow.
 
 ## Documentation

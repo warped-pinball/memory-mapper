@@ -745,6 +745,80 @@ class TestViewToggles:
             assert getattr(display, attr) is before
 
 
+class TestAboutOverlay:
+    def _render_text(self, renderable, width=120):
+        from io import StringIO
+
+        from rich.console import Console
+
+        buf = StringIO()
+        Console(file=buf, width=width).print(renderable)
+        return buf.getvalue()
+
+    def test_about_hidden_by_default(self):
+        t = MemoryTracker()
+        display = MemoryDisplay(t)
+        assert display.show_about is False
+
+    def test_question_mark_toggles_about(self):
+        t = MemoryTracker()
+        display = MemoryDisplay(t)
+        display._handle_input("?", stop_event=None)
+        assert display.show_about is True
+        display._handle_input("?", stop_event=None)
+        assert display.show_about is False
+
+    def test_escape_closes_about(self):
+        t = MemoryTracker()
+        display = MemoryDisplay(t)
+        display._handle_input("?", stop_event=None)
+        assert display.show_about is True
+        display._handle_input("\x1b", stop_event=None)
+        assert display.show_about is False
+
+    def test_escape_ignored_when_about_hidden(self):
+        t = MemoryTracker()
+        display = MemoryDisplay(t)
+        # A bare Esc with the overlay closed should not blow up or open it.
+        display._handle_input("\x1b", stop_event=None)
+        assert display.show_about is False
+
+    def test_about_panel_shows_versions(self):
+        from memory_mapper import __version__
+        from memory_mapper.display import _render_about
+
+        output = self._render_text(_render_about())
+        assert __version__ in output
+        assert "warpedpinball" in output
+        assert "memory-mapper version" in output
+
+    def test_about_panel_reports_missing_library(self, monkeypatch):
+        from memory_mapper import display as display_mod
+
+        monkeypatch.setattr(
+            display_mod.vector, "library_version", lambda: None
+        )
+        output = self._render_text(display_mod._render_about())
+        assert "not installed" in output
+
+    def test_about_panel_reports_library_version(self, monkeypatch):
+        from memory_mapper import display as display_mod
+
+        monkeypatch.setattr(
+            display_mod.vector, "library_version", lambda: "9.9.9"
+        )
+        output = self._render_text(display_mod._render_about())
+        assert "9.9.9" in output
+
+    def test_about_overlay_in_render(self):
+        t = MemoryTracker()
+        t.update(b"\x00\x01")
+        display = MemoryDisplay(t)
+        display.show_about = True
+        output = self._render_text(display._render())
+        assert "About" in output
+
+
 class TestInputParsing:
     def test_parse_mixed_keys_and_arrows(self):
         t = MemoryTracker()

@@ -18,7 +18,7 @@ try:
     import msvcrt
 except ImportError:  # pragma: no cover - non-Windows fallback
     msvcrt = None
-from typing import List, Optional, Tuple, Union
+from typing import Callable, List, Optional, Sequence, Tuple, Union
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -27,6 +27,7 @@ from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 
+from . import __version__, vector
 from .tracker import MemoryTracker, SCAN_MODES, BIT_SCAN_MODES
 
 HIGHLIGHT_DURATION_MIN = 0.5
@@ -47,10 +48,43 @@ BYTES_PER_ROW = 16
 ASCII_PRINTABLE_START = 32
 ASCII_PRINTABLE_END = 127
 
+WRITE_WARNING = (
+    "Caution, writing values to memory can have unexpected or harmful "
+    "effects, do so with caution."
+)
+
+# How long (seconds) to wait for packets before auto-opening the password
+# prompt — a machine that is already broadcasting answers well within this.
+PASSWORD_PROMPT_GRACE = 2.0
+
 # How often (seconds) the display re-renders when there is no user input.
 DATA_REFRESH_INTERVAL = 0.25
 # How often (seconds) the loop polls for keyboard input.
 INPUT_POLL_INTERVAL = 0.02
+
+
+def parse_write_values(text: str) -> List[int]:
+    """Parse user input into byte values.
+
+    Accepts whitespace-separated tokens, each decimal ("5") or 0x-prefixed
+    hex ("0x2F"). Raises ValueError for anything unparseable or out of the
+    0-255 byte range, and for empty input.
+    """
+    tokens = text.split()
+    if not tokens:
+        raise ValueError("no value entered")
+    values: List[int] = []
+    for token in tokens:
+        try:
+            value = int(token, 0)
+        except ValueError:
+            raise ValueError(
+                f"invalid value {token!r} (use decimal like 5 or hex like 0x2F)"
+            ) from None
+        if not (0 <= value <= 255):
+            raise ValueError(f"value {token!r} is outside the byte range 0-255")
+        values.append(value)
+    return values
 
 
 def _auto_bytes_per_row(
@@ -65,6 +99,28 @@ def _auto_bytes_per_row(
     return max(4, max(preferred, aligned))
 
 
+def _source_label(ip: str, source_names) -> str:
+    name = source_names.get(ip) if source_names else None
+    return f"{name}({ip})" if name else ip
+
+
+# Per-source streaming state -> (menu label color, waiting-screen wording).
+SOURCE_STATUS_STYLES = {
+    "streaming": ("bright_green", "streaming"),
+    "starting": ("yellow", "starting…"),
+    "failed": ("bright_red", "failed — check password (P)"),
+    "off": ("dim", "not streaming"),
+}
+
+
+def _styled_source_label(source: str, source_names, source_status) -> str:
+    """Markup for one source, colored by its streaming status."""
+    label = _source_label(source, source_names)
+    status = (source_status or {}).get(source)
+    color = SOURCE_STATUS_STYLES.get(status, (None, None))[0]
+    return f"[{color}]{label}[/{color}]" if color else label
+
+
 def _render_menu(
     tracker: MemoryTracker,
     selected_source: Optional[str],
@@ -72,20 +128,31 @@ def _render_menu(
     ascii_mode: bool = False,
     bit_mode: bool = False,
     compact: bool = False,
+    source_names=None,
+    sources=None,
+    source_status=None,
 ):
     senders = tracker.known_senders()
+    listed_sources = sources if sources is not None else senders
     stats = tracker.bit_scan_stats() if bit_mode else tracker.scan_stats()
 
     menu = Table.grid(expand=True)
     menu.add_column(ratio=5)
     menu.add_column(ratio=3)
 
+    if source_status is None:
+        # No manager: everything listed is an active sender.
+        source_status = {ip: "streaming" for ip in senders}
+
     sender_bits = ["[bold]Sources:[/bold]"]
-    for idx, sender in enumerate(senders[:9], start=1):
-        if sender == selected_source:
-            sender_bits.append(f"[bold bright_blue]{idx}[/bold bright_blue]:{sender}*")
+    for idx, source in enumerate(listed_sources[:9], start=1):
+        label = _styled_source_label(source, source_names, source_status)
+        if source == selected_source:
+            sender_bits.append(
+                f"[bold bright_blue]{idx}[/bold bright_blue]:{label}[bold]*[/bold]"
+            )
         else:
-            sender_bits.append(f"[bright_blue]{idx}[/bright_blue]:{sender}")
+            sender_bits.append(f"[bright_blue]{idx}[/bright_blue]:{label}")
 
     filter_label = selected_source or "(waiting for first source)"
     pps = tracker.packets_per_second()
@@ -109,6 +176,7 @@ def _render_menu(
         )
     nav_commands = (
         "[bold]Nav:[/bold] [cyan]←↑↓→[/cyan] move cursor  [cyan]Space[/cyan] mark  "
+        "[cyan]W[/cyan] write  [cyan]P[/cyan] password  "
         "[cyan]E[/cyan] export marked  [cyan]X[/cyan] export all  [cyan]T[/cyan] ASCII "
         + ("[bright_green]ON[/bright_green]" if ascii_mode else "off")
         + f"  [cyan]B[/cyan] mode:{mode_label}"
@@ -116,7 +184,8 @@ def _render_menu(
     )
     view_commands = (
         "[bold]View:[/bold] [cyan]M[/cyan] menu  [cyan]K[/cyan] legend  "
-        "[cyan]O[/cyan] offsets  [cyan]U[/cyan] cursor info  [cyan]V[/cyan] compact"
+        "[cyan]O[/cyan] offsets  [cyan]U[/cyan] cursor info  [cyan]V[/cyan] compact  "
+        "[cyan]?[/cyan] about"
     )
 
     metrics = (
@@ -149,6 +218,34 @@ def _render_legend(compact: bool = False):
     if compact:
         return legend
     return Panel(legend, border_style="bright_black", title="[bold]Legend[/bold]")
+
+
+def _render_about(compact: bool = False):
+    """Render the About panel showing tool and library versions."""
+    lib_version = vector.library_version()
+    lib_line = lib_version if lib_version else "not installed"
+
+    body = Text()
+    body.append("Memory Mapper\n", style="bold bright_cyan")
+    body.append("Live memory snapshot viewer for Warped Pinball Vector boards.\n\n")
+    body.append("memory-mapper version:  ", style="bold")
+    body.append(f"{__version__}\n")
+    body.append("warpedpinball library:  ", style="bold")
+    body.append(f"{lib_line}\n")
+    body.append("\nPress ", style="dim")
+    body.append("?", style="cyan")
+    body.append(" or ", style="dim")
+    body.append("Esc", style="cyan")
+    body.append(" to close.", style="dim")
+
+    if compact:
+        return body
+    return Panel(
+        body,
+        border_style="bright_cyan",
+        padding=(0, 1),
+        title="[bold]About[/bold]",
+    )
 
 
 def _render_status_bar(status_message: str) -> Text:
@@ -280,6 +377,9 @@ def render_snapshot(
     show_menu: bool = True,
     show_cursor_info: bool = True,
     compact: bool = False,
+    source_names=None,
+    sources=None,
+    source_status=None,
 ):
     snapshot = tracker.snapshot
 
@@ -290,7 +390,32 @@ def render_snapshot(
     )
 
     if snapshot is None:
-        body = Text("Waiting for data…", style=DIM_STYLE, justify="center")
+        listed = sources if sources is not None else tracker.known_senders()
+        if listed:
+            lines = ["[grey50]Waiting for data…[/grey50]", ""]
+            lines.append("[bold]Vector machines on your network:[/bold]")
+            for idx, ip in enumerate(listed[:9], start=1):
+                name = (source_names or {}).get(ip)
+                status = (source_status or {}).get(ip, "off")
+                color, wording = SOURCE_STATUS_STYLES.get(
+                    status, ("dim", status or "unknown")
+                )
+                machine = f"{name}  {ip}" if name else ip
+                lines.append(
+                    f"[bright_blue]{idx}[/bright_blue]  {machine}  "
+                    f"[{color}]● {wording}[/{color}]"
+                )
+            lines.append("")
+            lines.append(
+                "[grey50]Press a machine's number to start streaming from it[/grey50]"
+            )
+            body = Text.from_markup("\n".join(lines), justify="center")
+        else:
+            body = Text(
+                "Waiting for data…\nSearching the network for Vector machines…",
+                style=DIM_STYLE,
+                justify="center",
+            )
         memory_panel = Panel(body, title=title, border_style="bright_blue")
         parts: list = [memory_panel]
         if show_legend:
@@ -300,6 +425,8 @@ def render_snapshot(
                 _render_menu(
                     tracker, selected_source, status_message,
                     ascii_mode=ascii_mode, bit_mode=bit_mode, compact=compact,
+                    source_names=source_names, sources=sources,
+                    source_status=source_status,
                 )
             )
         else:
@@ -382,6 +509,8 @@ def render_snapshot(
             _render_menu(
                 tracker, selected_source, status_message,
                 ascii_mode=ascii_mode, bit_mode=bit_mode, compact=compact,
+                source_names=source_names, sources=sources,
+                source_status=source_status,
             )
         )
     else:
@@ -408,11 +537,31 @@ class MemoryDisplay:
         bytes_per_row: int = BYTES_PER_ROW,
         refresh_per_second: float = 4.0,
         selected_source: Optional[str] = None,
+        writer: Optional[Callable[[int, Sequence[int]], None]] = None,
+        machine_label: Optional[str] = None,
+        manager=None,
     ) -> None:
         self.tracker = tracker
         self.bytes_per_row = bytes_per_row
         self.refresh_per_second = refresh_per_second
         self.selected_source = selected_source
+        self.writer = writer
+        self.machine_label = machine_label
+        self.manager = manager
+        # Write flow state: None (inactive), "value" (typing values), or
+        # "confirm" (waiting on the safety confirmation).
+        self.write_stage: Optional[str] = None
+        self.write_buffer: str = ""
+        self.write_addr: int = 0
+        self.write_values: List[int] = []
+        # Password prompt state (opened when an authenticated action needs it).
+        self.password_stage: Optional[str] = None
+        self.password_buffer: str = ""
+        self._password_next: Optional[str] = None  # "write" to resume a write
+        self._password_declined: bool = False
+        self._password_prompted: bool = False
+        self._last_tick: float = 0.0
+        self._no_data_since: float = time.monotonic()
         self._console = Console()
         self.status_message = "Waiting for first snapshot"
         self.cursor_pos: int = 0
@@ -422,6 +571,7 @@ class MemoryDisplay:
         self.show_legend: bool = True
         self.show_menu: bool = True
         self.show_cursor_info: bool = True
+        self.show_about: bool = False
         self.compact: bool = False
         self._effective_bpr: int = bytes_per_row
 
@@ -527,6 +677,23 @@ class MemoryDisplay:
         if not key:
             return
 
+        if self.password_stage is not None:
+            self._handle_password_key(key)
+            return
+        if self.write_stage is not None:
+            self._handle_write_key(key)
+            return
+
+        # The About overlay is modal-ish: Esc closes it while it's open.
+        if self.show_about and key == "\x1b":
+            self.show_about = False
+            self.status_message = "About hidden"
+            return
+        if key == "?":
+            self.show_about = not self.show_about
+            self.status_message = f"About {'shown' if self.show_about else 'hidden'}"
+            return
+
         if key in ("UP", "DOWN", "LEFT", "RIGHT"):
             self._move_cursor(key)
             return
@@ -545,6 +712,12 @@ class MemoryDisplay:
             return
         if k == "x":
             self._export_all()
+            return
+        if k == "w":
+            self._begin_write()
+            return
+        if k == "p" and self.manager is not None:
+            self._open_password_prompt()
             return
         if k == "t":
             self.ascii_mode = not self.ascii_mode
@@ -621,6 +794,223 @@ class MemoryDisplay:
             else:
                 self.status_message = "Captured baseline; press scan option again after values change."
 
+    def _begin_write(self) -> None:
+        if self.writer is None:
+            self.status_message = (
+                "Writes unavailable: not connected to a Vector machine "
+                "(start without --listen-only and provide a password)"
+            )
+            return
+        snapshot = self.tracker.snapshot
+        if snapshot is None or not (0 <= self.cursor_pos < len(snapshot)):
+            self.status_message = "No data at cursor position"
+            return
+        if self.manager is not None and not self.manager.has_password():
+            self._password_next = "write"
+            self._open_password_prompt()
+            return
+        self.write_stage = "value"
+        self.write_addr = self.cursor_pos
+        self.write_buffer = ""
+        self.write_values = []
+        self.status_message = f"Writing to 0x{self.write_addr:04X} — enter value(s)"
+
+    def _current_machine_label(self) -> str:
+        if self.manager is not None:
+            ip = self.selected_source or self.manager.pick_target()
+            if ip:
+                return self.manager.label(ip)
+        return self.machine_label or self.selected_source or "(unknown machine)"
+
+    def _open_password_prompt(self) -> None:
+        self.password_stage = "input"
+        self.password_buffer = ""
+        self.status_message = "Enter the Vector password (Esc to skip)"
+
+    def _handle_password_key(self, key: str) -> None:
+        if key == "\x1b":
+            self.password_stage = None
+            self.password_buffer = ""
+            self._password_declined = True
+            self._password_next = None
+            self.status_message = (
+                "Password entry skipped — press P to enter it later"
+            )
+            return
+        if key in ("\r", "\n"):
+            password = self.password_buffer
+            self.password_stage = None
+            self.password_buffer = ""
+            if not password:
+                self._password_declined = True
+                self._password_next = None
+                self.status_message = (
+                    "Password entry skipped — press P to enter it later"
+                )
+                return
+            self._password_declined = False
+            if self.manager is not None:
+                self.manager.set_password(password)
+            if self._password_next == "write":
+                self._password_next = None
+                self._begin_write()
+            else:
+                if self.manager is not None:
+                    target = self.selected_source or self.manager.pick_target()
+                    if target is not None:
+                        self.manager.request_enable(target)
+                self.status_message = "Password set"
+            return
+        if key in ("\x7f", "\x08"):
+            self.password_buffer = self.password_buffer[:-1]
+            return
+        if len(key) == 1 and key.isprintable():
+            self.password_buffer += key
+
+    def _render_password_panel(self):
+        masked = "•" * len(self.password_buffer)
+        body = Text.from_markup(
+            f"[bold]Machine:[/bold] {self._current_machine_label()}\n"
+            "The Vector password is needed to enable the memory broadcast "
+            "and to write memory.\n"
+            f"[bold]Password:[/bold] {masked}[blink]▏[/blink]\n"
+            "[dim]Enter to submit, Esc to skip[/dim]"
+        )
+        return Panel(
+            body,
+            border_style="yellow",
+            padding=(0, 1),
+            title="[bold yellow]Vector Password[/bold yellow]",
+        )
+
+    def _background_tick(self) -> bool:
+        """Drain manager notices and drive the auto-enable flow.
+
+        Returns True when the UI needs a re-render.
+        """
+        if self.manager is None:
+            return False
+        now = time.monotonic()
+        if now - self._last_tick < 0.25:
+            return False
+        self._last_tick = now
+
+        changed = False
+        for notice in self.manager.pop_notices():
+            self.status_message = notice
+            changed = True
+
+        # Until data flows, keep nudging the target machine to broadcast.
+        if (
+            self.tracker.packet_count == 0
+            and self.password_stage is None
+            and self.write_stage is None
+        ):
+            target = self.selected_source or self.manager.pick_target()
+            if target is not None and self.manager.machine_name(target) is not None:
+                if self.manager.has_password():
+                    self.manager.request_enable(target)
+                elif (
+                    not self._password_declined
+                    and not self._password_prompted
+                    and now - self._no_data_since >= PASSWORD_PROMPT_GRACE
+                ):
+                    self._password_prompted = True
+                    self._open_password_prompt()
+                    changed = True
+        return changed
+
+    def _handle_write_key(self, key: str) -> None:
+        if key == "\x1b":  # ESC cancels at either stage
+            self._cancel_write()
+            return
+        if self.write_stage == "value":
+            if key in ("\r", "\n"):
+                try:
+                    self.write_values = parse_write_values(self.write_buffer)
+                except ValueError as exc:
+                    self.status_message = f"Invalid input: {exc}"
+                    return
+                self.write_stage = "confirm"
+                self.status_message = "Confirm write: press Y to write, any other key to cancel"
+                return
+            if key in ("\x7f", "\x08"):  # backspace
+                self.write_buffer = self.write_buffer[:-1]
+                return
+            if len(key) == 1 and (key.isalnum() or key == " "):
+                self.write_buffer += key
+            return
+        if self.write_stage == "confirm":
+            if key.lower() == "y":
+                self._perform_write()
+            else:
+                self._cancel_write()
+
+    def _cancel_write(self) -> None:
+        self.write_stage = None
+        self.write_buffer = ""
+        self.write_values = []
+        self.status_message = "Write cancelled"
+
+    def _perform_write(self) -> None:
+        addr, values = self.write_addr, self.write_values
+        self.write_stage = None
+        self.write_buffer = ""
+        self.write_values = []
+        try:
+            self.writer(addr, values)
+        except Exception as exc:  # surface device/auth errors in the status bar
+            self.status_message = f"Write failed: {exc}"
+        else:
+            self.status_message = (
+                f"Wrote {len(values)} byte{'s' if len(values) != 1 else ''} "
+                f"at 0x{addr:04X}"
+            )
+
+    def _render_write_panel(self):
+        machine = self._current_machine_label()
+        if self.write_stage == "value":
+            body = Text.from_markup(
+                f"[bold]Machine:[/bold] {machine}  "
+                f"[bold]Address:[/bold] 0x{self.write_addr:04X} ({self.write_addr})\n"
+                "Enter byte value(s), separated by spaces — decimal like 5 "
+                "or hex like 0x2F. Multiple values write to consecutive "
+                "addresses.\n"
+                f"[bold]Value(s):[/bold] {self.write_buffer}[blink]▏[/blink]\n"
+                "[dim]Enter to continue, Esc to cancel[/dim]"
+            )
+            return Panel(
+                body,
+                border_style="yellow",
+                padding=(0, 1),
+                title="[bold yellow]Write Memory[/bold yellow]",
+            )
+
+        snapshot = self.tracker.snapshot
+        current_parts = []
+        for i in range(len(self.write_values)):
+            addr = self.write_addr + i
+            if snapshot is not None and 0 <= addr < len(snapshot):
+                current_parts.append(f"0x{snapshot[addr]:02X}")
+            else:
+                current_parts.append("--")
+        new_parts = [f"0x{v:02X}" for v in self.write_values]
+        body = Text.from_markup(
+            f"[bold red]⚠ {WRITE_WARNING}[/bold red]\n"
+            f"[bold]Machine:[/bold] {machine}\n"
+            f"[bold]Address:[/bold] 0x{self.write_addr:04X} ({self.write_addr})  "
+            f"[bold]Bytes:[/bold] {len(self.write_values)}\n"
+            f"[bold]Current value(s):[/bold] {' '.join(current_parts)}\n"
+            f"[bold]New value(s):[/bold] {' '.join(new_parts)}\n"
+            "[bold]Press Y to confirm the write, any other key to cancel.[/bold]"
+        )
+        return Panel(
+            body,
+            border_style="red",
+            padding=(0, 1),
+            title="[bold red]Confirm Memory Write[/bold red]",
+        )
+
     def _move_cursor(self, direction: str) -> None:
         size = len(self.tracker.snapshot) if self.tracker.snapshot else 0
         if size == 0:
@@ -678,23 +1068,81 @@ class MemoryDisplay:
             json.dump(export_data, f, indent=2)
         self.status_message = f"Exported {len(entries)} addresses to {filename}"
 
-    def _select_source(self, source_number: int) -> None:
-        senders = self.tracker.known_senders()
-        index = source_number - 1
-        if 0 <= index < len(senders):
-            new_source = senders[index]
-            if new_source != self.selected_source:
-                self.selected_source = new_source
-                self.tracker.reset_for_new_source()
-                self.cursor_pos = 0
-                self.status_message = f"Selected source {source_number}: {self.selected_source}. Reset state for new source."
+    def _source_list(self) -> List[str]:
+        """Active senders first, then discovered machines that are silent."""
+        sources = self.tracker.known_senders()
+        if self.manager is not None:
+            for ip in self.manager.machines():
+                if ip not in sources:
+                    sources.append(ip)
+        return sources
+
+    def _source_statuses(self, sources: List[str]) -> dict:
+        """Streaming status per source, for color-coding the UI."""
+        statuses = {}
+        for ip in sources:
+            if ip in self.tracker.sender_packet_counts:
+                statuses[ip] = "streaming"
+                continue
+            state = (
+                self.manager.enable_status(ip)
+                if self.manager is not None
+                else None
+            )
+            if state in ("pending", "enabled"):
+                # Asked (or already told) to stream, no packets yet.
+                statuses[ip] = "starting"
+            elif state == "failed":
+                statuses[ip] = "failed"
             else:
-                self.status_message = f"Selected source {source_number}: {self.selected_source}"
-        else:
+                statuses[ip] = "off"
+        return statuses
+
+    def _select_source(self, source_number: int) -> None:
+        sources = self._source_list()
+        index = source_number - 1
+        if not (0 <= index < len(sources)):
             self.status_message = f"Source {source_number} is unavailable"
+            return
+        new_source = sources[index]
+        was_selected = new_source == self.selected_source
+        label = (
+            self.manager.label(new_source)
+            if self.manager is not None
+            else new_source
+        )
+        if new_source != self.selected_source:
+            self.selected_source = new_source
+            self.tracker.reset_for_new_source()
+            self.cursor_pos = 0
+            self._no_data_since = time.monotonic()
+            self.status_message = (
+                f"Selected source {source_number}: {label}. Reset state for new source."
+            )
+        else:
+            self.status_message = f"Selected source {source_number}: {label}"
+
+        # A discovered machine we've never heard a packet from isn't
+        # streaming yet — ask it to start (which needs the password).
+        # Re-selecting the current machine also re-sends the request, as a
+        # way to restart a stream that stopped (e.g. after a reboot).
+        needs_broadcast = (
+            self.manager is not None
+            and self.manager.machine_name(new_source) is not None
+            and (
+                new_source not in self.tracker.sender_packet_counts
+                or was_selected
+            )
+        )
+        if needs_broadcast:
+            if self.manager.has_password():
+                self.manager.request_enable(new_source, force=True)
+                self.status_message = f"Requesting memory broadcast from {label}…"
+            else:
+                self._open_password_prompt()
 
     def _render(self):
-        return render_snapshot(
+        base = render_snapshot(
             self.tracker,
             self.bytes_per_row,
             terminal_width=self._console.size.width,
@@ -708,7 +1156,21 @@ class MemoryDisplay:
             show_menu=self.show_menu,
             show_cursor_info=self.show_cursor_info,
             compact=self.compact,
+            source_names=self.manager.machines() if self.manager else None,
+            sources=self._source_list() if self.manager else None,
+            source_status=(
+                self._source_statuses(self._source_list())
+                if self.manager
+                else None
+            ),
         )
+        if self.show_about:
+            return Group(base, _render_about(compact=self.compact))
+        if self.password_stage is not None:
+            return Group(base, self._render_password_panel())
+        if self.write_stage is not None:
+            return Group(base, self._render_write_panel())
+        return base
 
     def _update_effective_bpr(self) -> None:
         self._effective_bpr = _auto_bytes_per_row(
@@ -745,6 +1207,8 @@ class MemoryDisplay:
                             dirty = True
                         if stop_event is not None and stop_event.is_set():
                             break
+                        if self._background_tick():
+                            dirty = True
 
                         now = time.monotonic()
                         data_due = now - last_render >= data_interval

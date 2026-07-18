@@ -1,16 +1,17 @@
 """Entry point for the memory-mapper CLI tool."""
 
 import argparse
+import ipaddress
 import sys
 import threading
 
 if __package__ in (None, ""):
-    from memory_mapper import __version__
+    from memory_mapper import __version__, vector
     from memory_mapper.display import MemoryDisplay
     from memory_mapper.receiver import start_receiver
     from memory_mapper.tracker import MemoryTracker
 else:
-    from . import __version__
+    from . import __version__, vector
     from .display import MemoryDisplay
     from .receiver import start_receiver
     from .tracker import MemoryTracker
@@ -25,12 +26,68 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="memory-mapper",
         description=(
-            "Listen for UDP multicast memory snapshots and display them in the "
-            "terminal, highlighting recently-changed bytes."
+            "Display live memory snapshots from Warped Pinball Vector boards "
+            "in the terminal, highlighting recently-changed bytes. Machines "
+            "are discovered in the background and asked to stream their "
+            "memory directly to this computer."
         ),
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
+    )
+    parser.add_argument(
+        "--machine",
+        default=None,
+        metavar="NAME_OR_IP",
+        help=(
+            "Vector machine to focus on, by LAN name (partial names work) or "
+            "IP address. By default the first machine discovered on the "
+            "network is used."
+        ),
+    )
+    parser.add_argument(
+        "--password",
+        default=None,
+        help=(
+            "Vector password, used to start the memory stream and to "
+            f"write memory (falls back to ${vector.PASSWORD_ENV_VAR}; "
+            "otherwise the app prompts when it's needed)."
+        ),
+    )
+    parser.add_argument(
+        "--frequency-ms",
+        type=int,
+        default=vector.DEFAULT_BROADCAST_FREQUENCY_MS,
+        metavar="MS",
+        help=(
+            "How often (milliseconds) the machine sends memory snapshots "
+            f"(default: {vector.DEFAULT_BROADCAST_FREQUENCY_MS}, clamped to "
+            f"{vector.BROADCAST_FREQUENCY_MIN_MS}-{vector.BROADCAST_FREQUENCY_MAX_MS})"
+        ),
+    )
+    parser.add_argument(
+        "--discover-timeout",
+        type=float,
+        default=vector.DEFAULT_DISCOVER_TIMEOUT,
+        metavar="SECONDS",
+        help=(
+            "How long each background discovery round listens for answers "
+            f"(default: {vector.DEFAULT_DISCOVER_TIMEOUT:g})"
+        ),
+    )
+    parser.add_argument(
+        "--listen-only",
+        action="store_true",
+        help=(
+            "Never discover or control machines; just listen for incoming "
+            "snapshots (something else must start the machine's memory "
+            "stream). Memory writes are unavailable."
+        ),
+    )
+    parser.add_argument(
+        "--keep-broadcasting",
+        action="store_true",
+        help="Leave the memory stream running on the machine when exiting.",
     )
     parser.add_argument(
         "--group",
@@ -67,11 +124,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--source-filter",
         default=None,
         help=(
-            "Only process packets from this sender IP. By default, the first detected "
-            "sender is selected."
+            "Only process packets from this sender IP. By default, the first "
+            "detected sender is selected."
         ),
     )
     return parser
+
+
+def _is_ip(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
 
 
 def main(argv=None) -> int:
@@ -84,6 +149,28 @@ def main(argv=None) -> int:
         parser.error("--bytes-per-row must be at least 1")
     if not (1 <= args.port <= 65535):
         parser.error("--port must be between 1 and 65535")
+    if args.frequency_ms < 1:
+        parser.error("--frequency-ms must be a positive number")
+    if args.discover_timeout <= 0:
+        parser.error("--discover-timeout must be a positive number")
+
+    manager = None
+    if not args.listen_only:
+        if vector.warpedpinball is None:
+            print(
+                "Warning: the 'warpedpinball' library is not installed; "
+                "running in listen-only mode. Install it with: pip install "
+                "warpedpinball",
+                file=sys.stderr,
+            )
+        else:
+            manager = vector.VectorManager(
+                password=args.password,
+                frequency_ms=args.frequency_ms,
+                discover_timeout=args.discover_timeout,
+                target=args.machine,
+            )
+            manager.start()
 
     tracker = MemoryTracker(highlight_duration=args.highlight_duration)
 
@@ -104,10 +191,24 @@ def main(argv=None) -> int:
 
     stop_event = threading.Event()
 
+    selected_source = args.source_filter
+    if selected_source is None and args.machine and _is_ip(args.machine):
+        selected_source = args.machine
+
+    writer = None
+    if manager is not None:
+        def writer(offset, values):
+            ip = display.selected_source or manager.pick_target()
+            if ip is None:
+                raise RuntimeError("no Vector machine discovered yet")
+            manager.write(ip, offset, values)
+
     display = MemoryDisplay(
         tracker,
         bytes_per_row=args.bytes_per_row,
-        selected_source=args.source_filter,
+        selected_source=selected_source,
+        writer=writer,
+        manager=manager,
     )
 
     receiver_thread = start_receiver(args.group, args.port, on_packet, stop_event)
@@ -119,6 +220,8 @@ def main(argv=None) -> int:
     finally:
         stop_event.set()
         receiver_thread.join(timeout=2.0)
+        if manager is not None:
+            manager.shutdown(disable_broadcasts=not args.keep_broadcasting)
 
     return 0
 
