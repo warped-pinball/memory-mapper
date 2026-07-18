@@ -151,6 +151,129 @@ class TestVectorConnection:
         assert machine.closed is True
 
 
+class FakeResponse:
+    def __init__(self, status_code=200, text="{}"):
+        self.status_code = status_code
+        self.text = text
+
+
+class FakeSession:
+    def __init__(self):
+        self.requests = []
+        self.responses = []
+
+    def request(self, method, url, data=None, headers=None, timeout=None):
+        self.requests.append(
+            {"method": method, "url": url, "data": data, "headers": headers}
+        )
+        return self.responses.pop(0) if self.responses else FakeResponse()
+
+
+class FakeTransport:
+    """Just enough of warpedpinball's HttpTransport for _signed_call."""
+
+    def __init__(self):
+        self.base_url = "http://10.0.0.5"
+        self.timeout = 10.0
+        self._session = FakeSession()
+        self.challenges = 0
+
+    def _fetch_challenge(self):
+        self.challenges += 1
+        return f"challenge{self.challenges}"
+
+
+class FakeMachineWithTransport(FakeMachine):
+    def __init__(self, password=""):
+        super().__init__(password=password)
+        self.transport = FakeTransport()
+
+
+class TestEmptyPasswordSigning:
+    def test_enable_with_empty_password_signs_via_library_auth(self):
+        from warpedpinball import auth
+
+        machine = FakeMachineWithTransport(password="")
+        conn = VectorConnection(machine, ip="10.0.0.5", password="")
+        conn.enable_broadcast(frequency_ms=250)
+
+        # The library's guarded high-level path is bypassed entirely.
+        assert machine.calls == []
+        reqs = machine.transport._session.requests
+        assert len(reqs) == 1
+        req = reqs[0]
+        assert req["method"] == "POST"
+        assert req["url"] == "http://10.0.0.5" + TOGGLE_BROADCAST_ROUTE
+        assert req["data"] == b'{"enable":true,"frequency_ms":250}'
+        # The request is signed with an empty-string HMAC key, using the
+        # library's own auth module.
+        expected = auth.sign(
+            "", "challenge1", TOGGLE_BROADCAST_ROUTE, req["data"].decode()
+        )
+        assert req["headers"]["x-auth-hmac"] == expected
+        assert req["headers"]["x-auth-challenge"] == "challenge1"
+        assert conn.broadcast_enabled is True
+
+    def test_disable_with_empty_password_signs(self):
+        machine = FakeMachineWithTransport(password="")
+        conn = VectorConnection(machine, ip="10.0.0.5", password="")
+        conn.disable_broadcast()
+        req = machine.transport._session.requests[-1]
+        assert req["data"] == b'{"enable":false}'
+        assert conn.broadcast_enabled is False
+
+    def test_write_with_empty_password_signs_via_library_auth(self):
+        machine = FakeMachineWithTransport(password="")
+        conn = VectorConnection(machine, ip="10.0.0.5", password="")
+        conn.write_memory(0x10, [5, 6])
+
+        # The library's write_bytes (which refuses empty passwords) is not used.
+        assert machine.writes == []
+        reqs = machine.transport._session.requests
+        assert len(reqs) == 1
+        assert reqs[0]["url"] == "http://10.0.0.5/api/address/write"
+        assert reqs[0]["data"] == b'{"offset":16,"values":[5,6]}'
+
+    def test_non_empty_password_still_uses_library(self):
+        # A real password takes the library's high-level path untouched.
+        machine = FakeMachineWithTransport(password="hunter2")
+        conn = VectorConnection(machine, ip="10.0.0.5", password="hunter2")
+        conn.enable_broadcast(frequency_ms=100)
+        conn.write_memory(0, [1])
+        assert machine.transport._session.requests == []
+        assert machine.calls[0][0] == TOGGLE_BROADCAST_ROUTE
+        assert machine.writes == [(0, [1])]
+
+    def test_signed_call_retries_once_on_stale_challenge(self):
+        machine = FakeMachineWithTransport(password="")
+        # First response: stale challenge (retryable 401); second: success.
+        machine.transport._session.responses = [
+            FakeResponse(401, '{"error": "challenge expired"}'),
+            FakeResponse(200, "{}"),
+        ]
+        conn = VectorConnection(machine, ip="10.0.0.5", password="")
+        conn.enable_broadcast()
+        # Two attempts, each with a freshly fetched challenge.
+        assert len(machine.transport._session.requests) == 2
+        assert machine.transport.challenges == 2
+
+
+class TestManagerEmptyPassword:
+    def test_empty_password_is_kept_and_counts_as_set(self, monkeypatch):
+        monkeypatch.delenv("VECTOR_PASSWORD", raising=False)
+        manager = VectorManager(password="")
+        assert manager.password == ""
+        assert manager.has_password() is True
+
+    def test_set_empty_password_counts_as_set(self, monkeypatch):
+        monkeypatch.delenv("VECTOR_PASSWORD", raising=False)
+        manager = VectorManager()
+        assert manager.has_password() is False
+        manager.set_password("")
+        assert manager.password == ""
+        assert manager.has_password() is True
+
+
 class FakeDiscovered:
     def __init__(self, ip, name):
         self.ip = ip

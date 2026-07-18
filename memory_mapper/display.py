@@ -121,6 +121,61 @@ def _styled_source_label(source: str, source_names, source_status) -> str:
     return f"[{color}]{label}[/{color}]" if color else label
 
 
+def _source_list_lines(source_names, sources, source_status, selected_source):
+    """Markup lines listing discovered machines and their streaming status."""
+    lines = ["[bold]Vector machines on your network:[/bold]"]
+    for idx, ip in enumerate(sources[:9], start=1):
+        name = (source_names or {}).get(ip)
+        status = (source_status or {}).get(ip, "off")
+        color, wording = SOURCE_STATUS_STYLES.get(status, ("dim", status or "unknown"))
+        machine = f"{name}  {ip}" if name else ip
+        marker = " [bold]*[/bold]" if ip == selected_source else ""
+        lines.append(
+            f"[bright_blue]{idx}[/bright_blue]  {machine}  "
+            f"[{color}]● {wording}[/{color}]{marker}"
+        )
+    lines.append("")
+    lines.append(
+        "[grey50]Press a machine's number to start streaming from it[/grey50]"
+    )
+    return lines
+
+
+def _render_sources_panel(
+    tracker: MemoryTracker,
+    selected_source: Optional[str] = None,
+    source_names=None,
+    sources=None,
+    source_status=None,
+    compact: bool = False,
+):
+    """The source list shown in place of the memory panel (toggled with S)."""
+    listed = sources if sources is not None else tracker.known_senders()
+    if listed:
+        body = Text.from_markup(
+            "\n".join(
+                _source_list_lines(
+                    source_names, listed, source_status, selected_source
+                )
+            ),
+            justify="center",
+        )
+    else:
+        body = Text(
+            "Searching the network for Vector machines…",
+            style=DIM_STYLE,
+            justify="center",
+        )
+    if compact:
+        return body
+    return Panel(
+        body,
+        title="[bold bright_blue]Sources[/bold bright_blue]",
+        border_style="bright_blue",
+        expand=True,
+    )
+
+
 def _render_menu(
     tracker: MemoryTracker,
     selected_source: Optional[str],
@@ -185,7 +240,7 @@ def _render_menu(
     view_commands = (
         "[bold]View:[/bold] [cyan]M[/cyan] menu  [cyan]K[/cyan] legend  "
         "[cyan]O[/cyan] offsets  [cyan]U[/cyan] cursor info  [cyan]V[/cyan] compact  "
-        "[cyan]?[/cyan] about"
+        "[cyan]S[/cyan] sources  [cyan]?[/cyan] about"
     )
 
     metrics = (
@@ -376,6 +431,7 @@ def render_snapshot(
     show_legend: bool = True,
     show_menu: bool = True,
     show_cursor_info: bool = True,
+    show_sources: bool = False,
     compact: bool = False,
     source_names=None,
     sources=None,
@@ -389,25 +445,40 @@ def render_snapshot(
         + "[/bold bright_blue]"
     )
 
+    # The sources view replaces the memory panel entirely, whether or not data
+    # is streaming, so the menu/legend still frame it below.
+    if show_sources:
+        parts: list = [
+            _render_sources_panel(
+                tracker,
+                selected_source=selected_source,
+                source_names=source_names,
+                sources=sources,
+                source_status=source_status,
+                compact=compact,
+            )
+        ]
+        if show_legend:
+            parts.append(_render_legend(compact=compact))
+        if show_menu:
+            parts.append(
+                _render_menu(
+                    tracker, selected_source, status_message,
+                    ascii_mode=ascii_mode, bit_mode=bit_mode, compact=compact,
+                    source_names=source_names, sources=sources,
+                    source_status=source_status,
+                )
+            )
+        else:
+            parts.append(_render_status_bar(status_message))
+        return Group(*parts)
+
     if snapshot is None:
         listed = sources if sources is not None else tracker.known_senders()
         if listed:
             lines = ["[grey50]Waiting for data…[/grey50]", ""]
-            lines.append("[bold]Vector machines on your network:[/bold]")
-            for idx, ip in enumerate(listed[:9], start=1):
-                name = (source_names or {}).get(ip)
-                status = (source_status or {}).get(ip, "off")
-                color, wording = SOURCE_STATUS_STYLES.get(
-                    status, ("dim", status or "unknown")
-                )
-                machine = f"{name}  {ip}" if name else ip
-                lines.append(
-                    f"[bright_blue]{idx}[/bright_blue]  {machine}  "
-                    f"[{color}]● {wording}[/{color}]"
-                )
-            lines.append("")
-            lines.append(
-                "[grey50]Press a machine's number to start streaming from it[/grey50]"
+            lines += _source_list_lines(
+                source_names, listed, source_status, selected_source
             )
             body = Text.from_markup("\n".join(lines), justify="center")
         else:
@@ -572,6 +643,7 @@ class MemoryDisplay:
         self.show_menu: bool = True
         self.show_cursor_info: bool = True
         self.show_about: bool = False
+        self.show_sources: bool = False
         self.compact: bool = False
         self._effective_bpr: int = bytes_per_row
 
@@ -741,6 +813,12 @@ class MemoryDisplay:
             self.compact = not self.compact
             self.status_message = f"Compact view {'enabled' if self.compact else 'disabled'}"
             return
+        # "S" swaps the memory panel for the source list. In bit mode "s" is the
+        # set(=1) scan filter, so the sources toggle yields to it there.
+        if k == "s" and not self.bit_mode:
+            self.show_sources = not self.show_sources
+            self.status_message = f"Sources {'shown' if self.show_sources else 'hidden'}"
+            return
         if k in ("+", "="):
             new_val = min(
                 HIGHLIGHT_DURATION_MAX,
@@ -830,16 +908,11 @@ class MemoryDisplay:
             )
             return
         if key in ("\r", "\n"):
+            # Submit whatever was typed — an empty password is valid, so Enter
+            # always confirms. Skipping is done with Esc (handled above).
             password = self.password_buffer
             self.password_stage = None
             self.password_buffer = ""
-            if not password:
-                self._password_declined = True
-                self._password_next = None
-                self.status_message = (
-                    "Password entry skipped — press P to enter it later"
-                )
-                return
             self._password_declined = False
             if self.manager is not None:
                 self.manager.set_password(password)
@@ -1147,6 +1220,7 @@ class MemoryDisplay:
             show_legend=self.show_legend,
             show_menu=self.show_menu,
             show_cursor_info=self.show_cursor_info,
+            show_sources=self.show_sources,
             compact=self.compact,
             source_names=self.manager.machines() if self.manager else None,
             sources=self._source_list() if self.manager else None,

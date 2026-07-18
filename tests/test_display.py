@@ -745,6 +745,57 @@ class TestViewToggles:
             assert getattr(display, attr) is before
 
 
+class TestSourcesView:
+    def _render_text(self, tracker, **kwargs):
+        from rich.console import Console
+        from io import StringIO
+
+        buf = StringIO()
+        console = Console(file=buf, width=200)
+        console.print(render_snapshot(tracker, **kwargs))
+        return buf.getvalue()
+
+    def test_s_toggles_sources_view(self):
+        t = MemoryTracker()
+        t.update(b"\x00\x01")
+        display = MemoryDisplay(t)
+        assert display.show_sources is False
+        display._handle_input("s", stop_event=None)
+        assert display.show_sources is True
+        assert "Sources shown" in display.status_message
+        display._handle_input("s", stop_event=None)
+        assert display.show_sources is False
+
+    def test_sources_view_replaces_memory_even_with_data(self):
+        # Data is present, but the sources view is shown instead of the hex dump.
+        t = MemoryTracker()
+        t.update(b"\x00\x01\x02\x03", sender="10.0.0.5")
+        output = self._render_text(
+            t,
+            show_sources=True,
+            selected_source="10.0.0.5",
+            source_names={"10.0.0.5": "elvira"},
+            sources=["10.0.0.5", "10.0.0.6"],
+            source_status={"10.0.0.5": "streaming", "10.0.0.6": "off"},
+        )
+        assert "Sources" in output
+        assert "elvira" in output and "10.0.0.5" in output
+        assert "10.0.0.6" in output
+        assert "Press a machine's number" in output
+        # The hex offset header should be gone — memory is not shown.
+        assert " Off " not in output
+
+    def test_s_does_not_toggle_sources_in_bit_mode(self):
+        # In bit mode "s" is the set(=1) scan filter, not the sources toggle.
+        t = MemoryTracker()
+        t.update(b"\xFF")
+        display = MemoryDisplay(t)
+        display.bit_mode = True
+        display._handle_input("s", stop_event=None)
+        assert display.show_sources is False
+        assert "bit scan" in display.status_message.lower()
+
+
 class TestAboutOverlay:
     def _render_text(self, renderable, width=120):
         from io import StringIO
