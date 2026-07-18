@@ -575,14 +575,6 @@ class MemoryDisplay:
         self.compact: bool = False
         self._effective_bpr: int = bytes_per_row
 
-    def _capture_keypress(self) -> Optional[str]:
-        """Read a single pending key event (legacy single-event reader)."""
-        events = self._poll_events(0)
-        for event in events:
-            if event[0] == "KEY":
-                return event[1]
-        return None
-
     def _poll_events(self, timeout: float) -> List[Tuple]:
         """Return pending input events as ("KEY", key) tuples.
 

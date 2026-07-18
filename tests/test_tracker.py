@@ -474,16 +474,6 @@ class TestBitScanWorkflow:
         # 3 steps total, bit0 hit in step 1 & 3, missed step 2 -> 1 miss -> soft match level 2
         assert t.bit_scan_match_level(0, 0) == 2
 
-    def test_get_bit_scan_matching_bytes(self):
-        t = MemoryTracker()
-        t.update(b"\x00\x00\x00")
-        t.apply_bit_scan("c")
-        t.update(b"\x01\x00\x04")  # byte 0 bit0 changed, byte 2 bit2 changed
-        t.apply_bit_scan("c")
-        matching = t.get_bit_scan_matching_bytes()
-        assert 0 in matching
-        assert 2 in matching
-
     def test_bit_scan_cleared_on_source_reset(self):
         t = MemoryTracker()
         t.update(b"\xFF", sender="10.0.0.1")

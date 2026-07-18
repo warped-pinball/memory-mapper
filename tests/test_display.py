@@ -185,8 +185,8 @@ class TestSourceSelection:
         assert "Selected source 2" in display.status_message
 
 
-class TestCaptureKeypress:
-    def test_capture_keypress_handles_select_oserror(self, monkeypatch):
+class TestPollEvents:
+    def test_poll_events_handles_select_oserror(self, monkeypatch):
         t = MemoryTracker()
         display = MemoryDisplay(t)
 
@@ -203,7 +203,7 @@ class TestCaptureKeypress:
             lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("not a socket")),
         )
 
-        assert display._capture_keypress() is None
+        assert display._poll_events(0) == []
 
 
 class TestCursorNavigation:

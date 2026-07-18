@@ -2,7 +2,7 @@
 
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Deque, Dict, List, Optional, Set, Tuple
 
 SCAN_MODES = {
@@ -27,7 +27,6 @@ class ScanStats:
     """Summary of the iterative scan state for UI rendering."""
 
     steps: int = 0
-    compared_bytes: int = 0
     hard_match_count: int = 0
     soft_match_count_1: int = 0
     soft_match_count_2: int = 0
@@ -47,7 +46,6 @@ class MemoryTracker:
         self.packet_times: Deque[float] = deque(maxlen=256)
         self.packet_sizes: Deque[int] = deque(maxlen=256)
         self.sender_packet_counts: Dict[str, int] = {}
-        self.latest_sender: Optional[str] = None
 
         self.scan_baseline: Optional[bytes] = None
         self.scan_steps: list[str] = []
@@ -168,7 +166,6 @@ class MemoryTracker:
         self._record_sender(sender)
 
     def _record_sender(self, sender: str) -> None:
-        self.latest_sender = sender
         self.sender_packet_counts[sender] = self.sender_packet_counts.get(sender, 0) + 1
 
     def apply_scan(self, mode_key: str) -> bool:
@@ -277,7 +274,6 @@ class MemoryTracker:
         self.bit_scan_total = {}
 
     def bit_scan_stats(self) -> ScanStats:
-        compared = len(self.bit_scan_total)
         hard = 0
         soft1 = 0
         soft2 = 0
@@ -292,7 +288,6 @@ class MemoryTracker:
                 soft2 += 1
         return ScanStats(
             steps=len(self.bit_scan_steps),
-            compared_bytes=compared,
             hard_match_count=hard,
             soft_match_count_1=soft1,
             soft_match_count_2=soft2,
@@ -314,16 +309,6 @@ class MemoryTracker:
             return 1
         return 0
 
-    def get_bit_scan_matching_bytes(self) -> List[int]:
-        """Return sorted list of byte indices that have at least one matching bit."""
-        matching: Set[int] = set()
-        for flat, total in self.bit_scan_total.items():
-            hits = self.bit_scan_hits.get(flat, 0)
-            misses = total - hits
-            if misses <= 2 and hits > 0:
-                matching.add(flat // 8)
-        return sorted(matching)
-
     def reset_scan(self) -> None:
         self.scan_baseline = bytes(self.snapshot) if self.snapshot is not None else None
         self.scan_steps = []
@@ -331,7 +316,6 @@ class MemoryTracker:
         self.scan_total = {}
 
     def scan_stats(self) -> ScanStats:
-        compared = len(self.scan_total)
         hard = 0
         soft1 = 0
         soft2 = 0
@@ -347,7 +331,6 @@ class MemoryTracker:
 
         return ScanStats(
             steps=len(self.scan_steps),
-            compared_bytes=compared,
             hard_match_count=hard,
             soft_match_count_1=soft1,
             soft_match_count_2=soft2,
