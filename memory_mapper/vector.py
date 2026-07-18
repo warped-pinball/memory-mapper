@@ -87,9 +87,6 @@ class VectorConnection:
     def has_password(self) -> bool:
         return bool(self.machine.password)
 
-    def verify_password(self) -> bool:
-        return self.machine.verify_password()
-
     def _set_broadcast(
         self, enabled: bool, frequency_ms: int, ip: Optional[str] = None
     ) -> None:
