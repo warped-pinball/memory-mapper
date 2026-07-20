@@ -326,7 +326,11 @@ data from arriving.
 **No machines are being discovered.**
 Discovery uses UDP broadcast on port 37020, which does not cross routers,
 VPNs, or Wi-Fi client isolation. The tool keeps retrying in the background,
-so a machine that boots up later will still be found.
+so a machine that boots up later will still be found. If broadcast is blocked
+on your network and nothing ever shows up, point the tool straight at a board
+by IP: `memory-mapper --machine 192.168.1.50`. The board is then used directly
+and the rest of the network is read from its own peer list, so no broadcast is
+needed. (Open the board's web page in a browser to find its IP.)
 
 **Status says "Could not enable memory broadcast…".**
 The password was wrong, or the machine was unreachable. Press `P` to re-enter

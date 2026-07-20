@@ -258,6 +258,65 @@ class TestEmptyPasswordSigning:
         assert machine.transport.challenges == 2
 
 
+class TestManagerSeedIps:
+    def test_seed_ip_is_known_immediately(self, monkeypatch):
+        monkeypatch.delenv("VECTOR_PASSWORD", raising=False)
+        manager = VectorManager(
+            seed_ips=["10.0.0.9"],
+            target="10.0.0.9",
+            discover_fn=lambda timeout: [],
+            connect_fn=lambda *a, **k: None,
+        )
+        # Usable before any discovery round runs — no broadcast needed.
+        assert "10.0.0.9" in manager.machines()
+        assert manager.pick_target() == "10.0.0.9"
+
+    def test_enrich_seeds_expands_network_via_peers(self, monkeypatch):
+        monkeypatch.delenv("VECTOR_PASSWORD", raising=False)
+        calls = []
+
+        def peers_fn(ip, timeout):
+            calls.append(ip)
+            return [("10.0.0.9", "elvira"), ("10.0.0.10", "taxi")]
+
+        manager = VectorManager(
+            seed_ips=["10.0.0.9"],
+            discover_fn=lambda timeout: [],
+            connect_fn=lambda *a, **k: None,
+            peers_fn=peers_fn,
+        )
+        manager._enrich_seeds()
+        assert calls == ["10.0.0.9"]
+        assert manager.machines() == {"10.0.0.9": "elvira", "10.0.0.10": "taxi"}
+        notices = manager.pop_notices()
+        assert any("taxi (10.0.0.10)" in n for n in notices)
+        # Succeeds once; a second pass does not refetch.
+        manager._enrich_seeds()
+        assert calls == ["10.0.0.9"]
+
+    def test_enrich_seeds_failure_keeps_seed_and_notices_once(self, monkeypatch):
+        monkeypatch.delenv("VECTOR_PASSWORD", raising=False)
+
+        def peers_fn(ip, timeout):
+            raise RuntimeError("unreachable")
+
+        manager = VectorManager(
+            seed_ips=["10.0.0.9"],
+            discover_fn=lambda timeout: [],
+            connect_fn=lambda *a, **k: None,
+            peers_fn=peers_fn,
+        )
+        manager._enrich_seeds()
+        # The seed stays listed so it's still selectable/usable.
+        assert "10.0.0.9" in manager.machines()
+        assert "Could not reach board 10.0.0.9" in manager.pop_notices()[-1]
+        # Deduped: a second failing pass does not repeat the notice, and it
+        # keeps trying (not marked enriched) until it succeeds.
+        manager._enrich_seeds()
+        assert manager.pop_notices() == []
+        assert manager._seeds_enriched is False
+
+
 class TestManagerEmptyPassword:
     def test_empty_password_is_kept_and_counts_as_set(self, monkeypatch):
         monkeypatch.delenv("VECTOR_PASSWORD", raising=False)

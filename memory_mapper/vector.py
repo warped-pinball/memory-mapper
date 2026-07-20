@@ -109,6 +109,34 @@ def discover_machines(timeout: float = DEFAULT_DISCOVER_TIMEOUT) -> List:
     return _require_library().discover(timeout=timeout)
 
 
+def peers_from_ip(
+    ip: str, timeout: float = DEFAULT_DISCOVER_TIMEOUT
+) -> List[Tuple[str, Optional[str]]]:
+    """Fetch the whole board list from one known board over unicast HTTP.
+
+    Bypasses UDP broadcast discovery entirely: connecting straight to an IP
+    and reading the firmware's ``/api/network/peers`` returns every board that
+    one knows about (including itself), so a single reachable IP reveals the
+    whole network even on networks that drop broadcast/PONG traffic. Returns
+    ``(ip, name)`` pairs; ``name`` may be ``None``.
+    """
+    wp = _require_library()
+    machine = wp.connect(ip, timeout=timeout)
+    try:
+        payload = machine.peers()
+    finally:
+        try:
+            machine.close()
+        except Exception:
+            pass
+    results: List[Tuple[str, Optional[str]]] = []
+    if isinstance(payload, dict):
+        for peer_ip, info in payload.items():
+            name = info.get("name") if isinstance(info, dict) else None
+            results.append((str(peer_ip), str(name) if name else None))
+    return results
+
+
 def clamp_frequency_ms(frequency_ms: int) -> int:
     return max(
         BROADCAST_FREQUENCY_MIN_MS,
@@ -261,8 +289,10 @@ class VectorManager:
         frequency_ms: int = DEFAULT_BROADCAST_FREQUENCY_MS,
         discover_timeout: float = DEFAULT_DISCOVER_TIMEOUT,
         target: Optional[str] = None,
+        seed_ips: Optional[List[str]] = None,
         discover_fn: Optional[Callable[..., List]] = None,
         connect_fn: Optional[Callable[..., VectorConnection]] = None,
+        peers_fn: Optional[Callable[..., List[Tuple[str, Optional[str]]]]] = None,
     ):
         self.frequency_ms = frequency_ms
         self.discover_timeout = discover_timeout
@@ -270,11 +300,21 @@ class VectorManager:
         self.target = target
         self._discover_fn = discover_fn or discover_machines
         self._connect_fn = connect_fn or connect_machine
+        self._peers_fn = peers_fn or peers_from_ip
         # ``None`` means no password provided; an empty string is a valid
         # (empty) password and is kept distinct from "not provided".
         self._password = password
         self._password_generation = 0
-        self._machines: "OrderedDict[str, str]" = OrderedDict()  # ip -> name
+        self._machines: "OrderedDict[str, Optional[str]]" = OrderedDict()  # ip -> name
+        # Known board IPs to use directly, bypassing broadcast discovery (e.g.
+        # a --machine IP on a network that drops UDP broadcast). Seeded now so
+        # the board is usable immediately; the worker then expands it into the
+        # full network via that board's own peer list.
+        self._seed_ips: List[str] = [ip for ip in (seed_ips or []) if ip]
+        for ip in self._seed_ips:
+            self._machines.setdefault(ip, None)
+        self._seeds_enriched: bool = False
+        self._last_seed_error: Optional[str] = None
         self._connections: Dict[str, VectorConnection] = {}
         # ip -> (state, password_generation); state: pending/enabled/failed
         self._enable_state: Dict[str, Tuple[str, int]] = {}
@@ -442,12 +482,46 @@ class VectorManager:
     def _run(self) -> None:
         next_discover = 0.0
         while not self._stop.is_set():
+            self._enrich_seeds()
             self._process_enable_requests()
             if time.monotonic() >= next_discover:
                 self._discover_once()
                 next_discover = time.monotonic() + DISCOVER_REST_INTERVAL
             self._wake.wait(timeout=0.25)
             self._wake.clear()
+
+    def _enrich_seeds(self) -> None:
+        """Expand seeded IPs into the full network via each board's peer list.
+
+        Runs until it succeeds once. Failures are surfaced (deduped) but the
+        seeded IP stays listed regardless, so the board remains usable — the
+        connect/enable path retries on selection — even if this never succeeds.
+        """
+        if self._seeds_enriched or not self._seed_ips:
+            return
+        got_any = False
+        for ip in list(self._seed_ips):
+            if self._stop.is_set():
+                return
+            try:
+                peers = self._peers_fn(ip, self.discover_timeout)
+            except Exception as exc:
+                message = f"Could not reach board {ip}: {exc}"
+                if message != self._last_seed_error:
+                    self._last_seed_error = message
+                    self._notice(message)
+                continue
+            got_any = True
+            with self._lock:
+                for peer_ip, name in peers:
+                    is_new = peer_ip not in self._machines
+                    if (is_new or self._machines.get(peer_ip) is None) and name:
+                        self._notice(f"Found {name} ({peer_ip})")
+                    if name or is_new:
+                        self._machines[peer_ip] = name or self._machines.get(peer_ip)
+        if got_any:
+            self._seeds_enriched = True
+            self._last_seed_error = None
 
     def _discover_once(self) -> None:
         try:
