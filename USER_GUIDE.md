@@ -35,15 +35,16 @@ the tool then behaves as a pure listener and never touches the machine
 
 ### Pre-built binaries
 
-Download the latest build for your platform — these links always point to the
-newest [release](https://github.com/warped-pinball/memory-mapper/releases):
+Download the build for your platform from the
+[latest release](https://github.com/warped-pinball/memory-mapper/releases/latest).
+Each asset carries the release version in its name:
 
-| Platform          | Download                                                   |
-|-------------------|------------------------------------------------------------|
-| Ubuntu x86_64     | [`...linux-amd64.deb`](https://github.com/warped-pinball/memory-mapper/releases/latest/download/warped-pinball-memory-mapper-linux-amd64.deb) |
-| Raspberry Pi      | [`...linux-arm64-raspberry-pi.deb`](https://github.com/warped-pinball/memory-mapper/releases/latest/download/warped-pinball-memory-mapper-linux-arm64-raspberry-pi.deb) |
-| macOS             | [`...macos`](https://github.com/warped-pinball/memory-mapper/releases/latest/download/warped-pinball-memory-mapper-macos) |
-| Windows           | [`...windows.exe`](https://github.com/warped-pinball/memory-mapper/releases/latest/download/warped-pinball-memory-mapper-windows.exe) |
+| Platform          | Asset                                                       |
+|-------------------|-------------------------------------------------------------|
+| Ubuntu x86_64     | `warped-pinball-memory-mapper-linux-amd64-<version>.deb`     |
+| Raspberry Pi      | `warped-pinball-memory-mapper-linux-arm64-raspberry-pi-<version>.deb` |
+| macOS             | `warped-pinball-memory-mapper-macos-<version>`               |
+| Windows           | `warped-pinball-memory-mapper-windows-<version>.exe`         |
 
 On Ubuntu or Raspberry Pi, install the `.deb` with `sudo apt install ./<file>.deb`.
 On macOS and Windows, run the downloaded executable directly.
