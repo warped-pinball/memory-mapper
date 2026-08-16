@@ -40,16 +40,13 @@ Publishing a GitHub Release (a tag matching `v*`) triggers the
 to produce standalone executables for Linux (x86_64 `.deb`), Raspberry Pi
 (ARM64 `.deb`), macOS, and Windows.
 
-Each platform artifact is uploaded twice:
+Each platform artifact is uploaded once, under a versioned name (e.g.
+`warped-pinball-memory-mapper-linux-amd64-1.2.0.deb`), so every asset on a
+release is unambiguous about which version it contains.
 
-- A **versioned** name (e.g. `warped-pinball-memory-mapper-linux-amd64-1.2.0.deb`)
-  for a permanent, per-release archive.
-- A **version-less** name (e.g. `warped-pinball-memory-mapper-linux-amd64.deb`)
-  so that the `releases/latest/download/<name>` URLs in the README always
-  resolve to the newest release without needing to be updated each time.
-
-If you change an artifact's version-less name, update the matching download
-link in `README.md` so the "always latest" links keep working.
+Because the assets are versioned, there are no fixed
+`releases/latest/download/<name>` URLs; `README.md` and `USER_GUIDE.md` link to
+the `releases/latest` page instead and describe the naming scheme.
 
 ### Pull request previews
 

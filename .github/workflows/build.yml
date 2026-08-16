@@ -58,18 +58,12 @@ jobs:
         run: |
           PACKAGE_VERSION="${GITHUB_REF_NAME#v}"
           VERSIONED_BASENAME="warped-pinball-memory-mapper-${{ matrix.platform_slug }}-${PACKAGE_VERSION}"
-          LATEST_BASENAME="warped-pinball-memory-mapper-${{ matrix.platform_slug }}"
           if [ -n "${{ matrix.artifact_extension }}" ]; then
             RELEASE_FILENAME="${VERSIONED_BASENAME}.${{ matrix.artifact_extension }}"
-            LATEST_FILENAME="${LATEST_BASENAME}.${{ matrix.artifact_extension }}"
           else
             RELEASE_FILENAME="${VERSIONED_BASENAME}"
-            LATEST_FILENAME="${LATEST_BASENAME}"
           fi
-          # The version-less name gives the README stable
-          # releases/latest/download/<name> links that never need updating.
           echo "release_filename=${RELEASE_FILENAME}" >> "${GITHUB_OUTPUT}"
-          echo "latest_filename=${LATEST_FILENAME}" >> "${GITHUB_OUTPUT}"
 
       - name: Build Linux .deb package
         if: runner.os == 'Linux'
@@ -92,18 +86,19 @@ jobs:
           chmod 0755 pkg/usr/local/bin/memory-mapper
 
           dpkg-deb --build pkg "dist/${{ steps.release_file.outputs.release_filename }}"
-          cp "dist/${{ steps.release_file.outputs.release_filename }}" "dist/${{ steps.release_file.outputs.latest_filename }}"
 
       - name: Rename non-Linux artifacts for release
         if: runner.os != 'Linux'
         shell: bash
         run: |
-          mv "dist/${{ matrix.executable_name }}" "dist/${{ steps.release_file.outputs.release_filename }}"
-          cp "dist/${{ steps.release_file.outputs.release_filename }}" "dist/${{ steps.release_file.outputs.latest_filename }}"
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            mv "dist/${{ matrix.executable_name }}.exe" "dist/${{ steps.release_file.outputs.release_filename }}"
+          else
+            mv "dist/${{ matrix.executable_name }}" "dist/${{ steps.release_file.outputs.release_filename }}"
+          fi
 
       - name: Upload binary to release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/${{ steps.release_file.outputs.release_filename }}
-            dist/${{ steps.release_file.outputs.latest_filename }}
