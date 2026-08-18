@@ -42,7 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Vector machine to focus on, by LAN name (partial names work) or "
             "IP address. By default the first machine discovered on the "
-            "network is used."
+            "network is used. When given an IP, the board is used directly and "
+            "the rest of the network is read from its peer list, so it works "
+            "even when UDP broadcast discovery is blocked."
         ),
     )
     parser.add_argument(
@@ -164,11 +166,15 @@ def main(argv=None) -> int:
                 file=sys.stderr,
             )
         else:
+            # A --machine IP is a known board: seed it so it works without
+            # broadcast discovery (some networks drop UDP broadcast).
+            seed_ips = [args.machine] if args.machine and _is_ip(args.machine) else None
             manager = vector.VectorManager(
                 password=args.password,
                 frequency_ms=args.frequency_ms,
                 discover_timeout=args.discover_timeout,
                 target=args.machine,
+                seed_ips=seed_ips,
             )
             manager.start()
 

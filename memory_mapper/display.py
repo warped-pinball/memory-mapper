@@ -121,6 +121,88 @@ def _styled_source_label(source: str, source_names, source_status) -> str:
     return f"[{color}]{label}[/{color}]" if color else label
 
 
+def _source_list_lines(source_names, sources, source_status, selected_source):
+    """Markup lines listing discovered machines and their streaming status."""
+    lines = ["[bold]Vector machines on your network:[/bold]"]
+    for idx, ip in enumerate(sources[:9], start=1):
+        name = (source_names or {}).get(ip)
+        status = (source_status or {}).get(ip, "off")
+        color, wording = SOURCE_STATUS_STYLES.get(status, ("dim", status or "unknown"))
+        machine = f"{name}  {ip}" if name else ip
+        marker = " [bold]*[/bold]" if ip == selected_source else ""
+        lines.append(
+            f"[bright_blue]{idx}[/bright_blue]  {machine}  "
+            f"[{color}]● {wording}[/{color}]{marker}"
+        )
+    lines.append("")
+    lines.append(
+        "[grey50]Press a machine's number to start streaming from it[/grey50]"
+    )
+    return lines
+
+
+def _render_sources_panel(
+    tracker: MemoryTracker,
+    selected_source: Optional[str] = None,
+    source_names=None,
+    sources=None,
+    source_status=None,
+    compact: bool = False,
+):
+    """The source list shown in place of the memory panel (toggled with S)."""
+    listed = sources if sources is not None else tracker.known_senders()
+    if listed:
+        body = Text.from_markup(
+            "\n".join(
+                _source_list_lines(
+                    source_names, listed, source_status, selected_source
+                )
+            ),
+            justify="center",
+        )
+    else:
+        body = Text(
+            "Searching the network for Vector machines…",
+            style=DIM_STYLE,
+            justify="center",
+        )
+    if compact:
+        return body
+    return Panel(
+        body,
+        title="[bold bright_blue]Sources[/bold bright_blue]",
+        border_style="bright_blue",
+        expand=True,
+    )
+
+
+def _stats_summary(tracker: MemoryTracker, bit_mode: bool = False) -> str:
+    """One-line live data stats shown in the memory panel's bottom border.
+
+    Leads with the live-rate and scan-match stats (the numbers users watch)
+    so they survive if a narrow terminal truncates the border text.
+    """
+    stats = tracker.bit_scan_stats() if bit_mode else tracker.scan_stats()
+    pps = tracker.packets_per_second()
+    hertz = tracker.refreshes_per_second()
+    age = tracker.data_age_seconds()
+    age_text = "—" if age is None else f"{age:.1f}s"
+    size = len(tracker.snapshot) if tracker.snapshot is not None else 0
+    marked = len(tracker.marked_addresses)
+    return (
+        f"[dim]Rate[/dim] [bold]{pps:.1f}/s[/bold]  "
+        f"[dim]Refresh[/dim] [bold]{hertz:.2f} Hz[/bold]  "
+        f"[dim]Age[/dim] [bold]{age_text}[/bold]  "
+        f"[dim]Hard[/dim] [bold]{stats.hard_match_count}[/bold]  "
+        f"[dim]Soft[/dim] [bold]{stats.soft_match_count_1}/{stats.soft_match_count_2}[/bold]  "
+        f"[dim]Steps[/dim] [bold]{stats.steps}[/bold]  "
+        f"[dim]Packets[/dim] [bold]{tracker.packet_count}[/bold]  "
+        f"[dim]Size[/dim] [bold]{size}B[/bold]  "
+        f"[dim]Highlight[/dim] [bold]{tracker.highlight_duration:.1f}s[/bold]  "
+        f"[dim]Marked[/dim] [bold]{marked}[/bold]"
+    )
+
+
 def _render_menu(
     tracker: MemoryTracker,
     selected_source: Optional[str],
@@ -134,7 +216,6 @@ def _render_menu(
 ):
     senders = tracker.known_senders()
     listed_sources = sources if sources is not None else senders
-    stats = tracker.bit_scan_stats() if bit_mode else tracker.scan_stats()
 
     menu = Table.grid(expand=True)
     menu.add_column(ratio=5)
@@ -155,10 +236,6 @@ def _render_menu(
             sender_bits.append(f"[bright_blue]{idx}[/bright_blue]:{label}")
 
     filter_label = selected_source or "(waiting for first source)"
-    pps = tracker.packets_per_second()
-    hertz = tracker.refreshes_per_second()
-    age = tracker.data_age_seconds()
-    age_text = "—" if age is None else f"{age:.1f}s"
 
     mode_label = "[bright_green]BIT[/bright_green]" if bit_mode else "BYTE"
 
@@ -185,15 +262,12 @@ def _render_menu(
     view_commands = (
         "[bold]View:[/bold] [cyan]M[/cyan] menu  [cyan]K[/cyan] legend  "
         "[cyan]O[/cyan] offsets  [cyan]U[/cyan] cursor info  [cyan]V[/cyan] compact  "
-        "[cyan]?[/cyan] about"
+        "[cyan]S[/cyan] sources  [cyan]?[/cyan] about"
     )
 
-    metrics = (
-        f"[bold]Selected:[/bold] {filter_label}  [bold]Rate:[/bold] {pps:.1f} pkt/s  "
-        f"[bold]Refresh:[/bold] {hertz:.2f} Hz  [bold]Age:[/bold] {age_text}\n"
-        f"[bold]Steps:[/bold] {stats.steps}  [bold]Hard:[/bold] {stats.hard_match_count}  "
-        f"[bold]Soft(1 miss):[/bold] {stats.soft_match_count_1}  [bold]Soft(2 misses):[/bold] {stats.soft_match_count_2}"
-    )
+    # Live data stats (rate, Hz, matches) now live in the memory panel's
+    # bottom border via _stats_summary; the menu keeps just the active source.
+    metrics = f"[bold]Selected:[/bold] {filter_label}"
 
     menu.add_row(" ".join(sender_bits), metrics)
     menu.add_row(scan_commands, "")
@@ -376,6 +450,7 @@ def render_snapshot(
     show_legend: bool = True,
     show_menu: bool = True,
     show_cursor_info: bool = True,
+    show_sources: bool = False,
     compact: bool = False,
     source_names=None,
     sources=None,
@@ -389,25 +464,40 @@ def render_snapshot(
         + "[/bold bright_blue]"
     )
 
+    # The sources view replaces the memory panel entirely, whether or not data
+    # is streaming, so the menu/legend still frame it below.
+    if show_sources:
+        parts: list = [
+            _render_sources_panel(
+                tracker,
+                selected_source=selected_source,
+                source_names=source_names,
+                sources=sources,
+                source_status=source_status,
+                compact=compact,
+            )
+        ]
+        if show_legend:
+            parts.append(_render_legend(compact=compact))
+        if show_menu:
+            parts.append(
+                _render_menu(
+                    tracker, selected_source, status_message,
+                    ascii_mode=ascii_mode, bit_mode=bit_mode, compact=compact,
+                    source_names=source_names, sources=sources,
+                    source_status=source_status,
+                )
+            )
+        else:
+            parts.append(_render_status_bar(status_message))
+        return Group(*parts)
+
     if snapshot is None:
         listed = sources if sources is not None else tracker.known_senders()
         if listed:
             lines = ["[grey50]Waiting for data…[/grey50]", ""]
-            lines.append("[bold]Vector machines on your network:[/bold]")
-            for idx, ip in enumerate(listed[:9], start=1):
-                name = (source_names or {}).get(ip)
-                status = (source_status or {}).get(ip, "off")
-                color, wording = SOURCE_STATUS_STYLES.get(
-                    status, ("dim", status or "unknown")
-                )
-                machine = f"{name}  {ip}" if name else ip
-                lines.append(
-                    f"[bright_blue]{idx}[/bright_blue]  {machine}  "
-                    f"[{color}]● {wording}[/{color}]"
-                )
-            lines.append("")
-            lines.append(
-                "[grey50]Press a machine's number to start streaming from it[/grey50]"
+            lines += _source_list_lines(
+                source_names, listed, source_status, selected_source
             )
             body = Text.from_markup("\n".join(lines), justify="center")
         else:
@@ -478,15 +568,12 @@ def render_snapshot(
                 )
         memory_text.append(line)
 
-    marked_count = len(tracker.marked_addresses)
-    status = (
-        f"[dim]Packets[/dim] [bold]{tracker.packet_count}[/bold]  "
-        f"[dim]Size[/dim] [bold]{size}B[/bold]  "
-        f"[dim]Highlight[/dim] [bold]{tracker.highlight_duration:.1f}s[/bold]  "
-        f"[dim]Marked[/dim] [bold]{marked_count}[/bold]"
-    )
+    status = _stats_summary(tracker, bit_mode=bit_mode)
 
     if compact:
+        # No border to carry a subtitle in compact mode, so append the stats
+        # as a trailing line under the hex instead.
+        memory_text.append(Text.from_markup("\n" + status))
         memory_renderable: Union[Text, Panel] = memory_text
     else:
         memory_renderable = Panel(
@@ -572,6 +659,7 @@ class MemoryDisplay:
         self.show_menu: bool = True
         self.show_cursor_info: bool = True
         self.show_about: bool = False
+        self.show_sources: bool = False
         self.compact: bool = False
         self._effective_bpr: int = bytes_per_row
 
@@ -741,6 +829,12 @@ class MemoryDisplay:
             self.compact = not self.compact
             self.status_message = f"Compact view {'enabled' if self.compact else 'disabled'}"
             return
+        # "S" swaps the memory panel for the source list. In bit mode "s" is the
+        # set(=1) scan filter, so the sources toggle yields to it there.
+        if k == "s" and not self.bit_mode:
+            self.show_sources = not self.show_sources
+            self.status_message = f"Sources {'shown' if self.show_sources else 'hidden'}"
+            return
         if k in ("+", "="):
             new_val = min(
                 HIGHLIGHT_DURATION_MAX,
@@ -830,16 +924,11 @@ class MemoryDisplay:
             )
             return
         if key in ("\r", "\n"):
+            # Submit whatever was typed — an empty password is valid, so Enter
+            # always confirms. Skipping is done with Esc (handled above).
             password = self.password_buffer
             self.password_stage = None
             self.password_buffer = ""
-            if not password:
-                self._password_declined = True
-                self._password_next = None
-                self.status_message = (
-                    "Password entry skipped — press P to enter it later"
-                )
-                return
             self._password_declined = False
             if self.manager is not None:
                 self.manager.set_password(password)
@@ -1147,6 +1236,7 @@ class MemoryDisplay:
             show_legend=self.show_legend,
             show_menu=self.show_menu,
             show_cursor_info=self.show_cursor_info,
+            show_sources=self.show_sources,
             compact=self.compact,
             source_names=self.manager.machines() if self.manager else None,
             sources=self._source_list() if self.manager else None,
