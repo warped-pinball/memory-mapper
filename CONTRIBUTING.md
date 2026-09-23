@@ -40,6 +40,17 @@ Publishing a GitHub Release (a tag matching `v*`) triggers the
 to produce standalone executables for Linux (x86_64 `.deb`), Raspberry Pi
 (ARM64 `.deb`), macOS, and Windows.
 
+The two Linux binaries are built inside a `debian:bookworm-slim` container by
+[`scripts/build-linux-binary.sh`](scripts/build-linux-binary.sh) rather than
+directly on the runner. PyInstaller executables are only forward compatible with
+glibc, and the GitHub runners ship a newer glibc than Raspberry Pi OS Bookworm
+(2.36); building on the runner produced binaries that failed to start on a Pi
+with a `GLIBC_2.3x not found` error. Building in Bookworm pins the oldest glibc
+we support, and the `.deb` declares `Depends: libc6 (>= 2.36)` so apt reports a
+clear error instead of installing a binary that cannot run. Raising that
+baseline means changing the image in the script and the `Depends` line in both
+build workflows together.
+
 Each platform artifact is uploaded once, under a versioned name (e.g.
 `warped-pinball-memory-mapper-linux-amd64-1.2.0.deb`), so every asset on a
 release is unambiguous about which version it contains.
