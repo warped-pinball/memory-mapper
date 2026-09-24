@@ -39,15 +39,17 @@ Every asset is named `warped-pinball-memory-mapper-<platform>-<version>`:
 
 | Platform | Asset |
 |----------|-------|
-| Linux (Ubuntu x86_64) | `warped-pinball-memory-mapper-linux-amd64-<version>.deb` |
-| Raspberry Pi (Ubuntu ARM64) | `warped-pinball-memory-mapper-linux-arm64-raspberry-pi-<version>.deb` |
+| Linux (x86_64) | `warped-pinball-memory-mapper-linux-amd64-<version>.deb` |
+| Raspberry Pi (ARM64) | `warped-pinball-memory-mapper-linux-arm64-raspberry-pi-<version>.deb` |
 | macOS | `warped-pinball-memory-mapper-macos-<version>` |
 | Windows | `warped-pinball-memory-mapper-windows-<version>.exe` |
 
 On Ubuntu or Raspberry Pi, install the `.deb` with
 `sudo apt install ./<file>.deb`; this places a `memory-mapper` command in
-`/usr/local/bin` without requiring Python. On macOS and Windows, run the
-downloaded executable directly.
+`/usr/local/bin` without requiring Python. The Linux packages are built against
+glibc 2.36, so they run on Debian 12 (Bookworm), Raspberry Pi OS Bookworm,
+Ubuntu 22.04 and anything newer. On macOS and Windows, run the downloaded
+executable directly.
 
 ### From source
 

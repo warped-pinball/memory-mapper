@@ -41,12 +41,14 @@ Each asset carries the release version in its name:
 
 | Platform          | Asset                                                       |
 |-------------------|-------------------------------------------------------------|
-| Ubuntu x86_64     | `warped-pinball-memory-mapper-linux-amd64-<version>.deb`     |
+| Linux x86_64      | `warped-pinball-memory-mapper-linux-amd64-<version>.deb`     |
 | Raspberry Pi      | `warped-pinball-memory-mapper-linux-arm64-raspberry-pi-<version>.deb` |
 | macOS             | `warped-pinball-memory-mapper-macos-<version>`               |
 | Windows           | `warped-pinball-memory-mapper-windows-<version>.exe`         |
 
 On Ubuntu or Raspberry Pi, install the `.deb` with `sudo apt install ./<file>.deb`.
+The Linux packages need glibc 2.36 or newer, which covers Debian 12 (Bookworm),
+Raspberry Pi OS Bookworm, Ubuntu 22.04 and later releases.
 On macOS and Windows, run the downloaded executable directly.
 
 ### From source

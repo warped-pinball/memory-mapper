@@ -39,18 +39,28 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: runner.os != 'Linux'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install build dependencies
+        if: runner.os != 'Linux'
         run: |
           python -m pip install --upgrade pip
           pip install . pyinstaller
 
       - name: Build standalone executable
+        if: runner.os != 'Linux'
         run: |
           pyinstaller --onefile --name "${{ matrix.executable_name }}" memory_mapper/__main__.py
+
+      # Built inside Debian Bookworm (glibc 2.36) so the binary runs on
+      # Raspberry Pi OS Bookworm and newer, rather than requiring the runner's
+      # newer glibc. See scripts/build-linux-binary.sh.
+      - name: Build standalone executable (Linux, Bookworm glibc)
+        if: runner.os == 'Linux'
+        run: scripts/build-linux-binary.sh "${{ matrix.executable_name }}"
 
       - name: Set release filename
         id: release_file
@@ -77,6 +87,7 @@ jobs:
             echo "Section: utils"
             echo "Priority: optional"
             echo "Architecture: ${{ matrix.deb_arch }}"
+            echo "Depends: libc6 (>= 2.36)"
             echo "Maintainer: Memory Mapper Maintainers"
             echo "Description: UDP multicast memory snapshot viewer"
             echo " Standalone CLI tool that displays byte-level memory updates in the terminal."
