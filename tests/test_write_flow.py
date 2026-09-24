@@ -72,7 +72,8 @@ class StubManager:
         return next(iter(self._machines), None)
 
     def has_password(self):
-        return bool(self._password)
+        # An empty string is a valid (empty) password; only None means none.
+        return self._password is not None
 
     def set_password(self, password):
         self._password = password
@@ -234,6 +235,18 @@ class TestPasswordFlow:
         assert manager.set_password_calls == ["hunter2"]
         assert manager.enable_requests == ["10.0.0.5"]
         assert display.password_stage is None
+
+    def test_empty_password_is_accepted(self):
+        # An empty password is valid: Enter submits it (Esc, not Enter, skips).
+        manager = StubManager(machines={"10.0.0.5": "elvira"})
+        display = make_display(manager=manager, snapshot=None)
+        display._no_data_since = 0.0
+        display._background_tick()
+        send_keys(display, ["\r"])  # submit an empty password
+        assert manager.set_password_calls == [""]
+        assert manager.enable_requests == ["10.0.0.5"]
+        assert display.password_stage is None
+        assert display._password_declined is False
 
     def test_password_escape_skips(self):
         manager = StubManager(machines={"10.0.0.5": "elvira"})
