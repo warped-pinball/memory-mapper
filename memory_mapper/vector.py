@@ -33,6 +33,51 @@ class VectorUnavailableError(RuntimeError):
     """Raised when the warpedpinball library is not installed."""
 
 
+def _signed_call(transport, password: str, path: str, body=None):
+    """Perform an authenticated request that also works with an empty password.
+
+    The warpedpinball high-level methods (and its HTTP transport) refuse to
+    sign a request when the password is falsy — ``if not self.password: raise``
+    — so an empty password never reaches the wire. Vector firmware, however,
+    treats an empty password as valid and simply signs with an empty-string
+    HMAC key. This bridges that gap by reusing the library's own auth protocol
+    (``warpedpinball.auth``), body serialization, and error mapping over the
+    machine's existing HTTP transport, so authentication is performed exactly
+    as the library would — minus the empty-password guard.
+    """
+    from warpedpinball import auth
+    from warpedpinball.transports import parse_body, raise_for_status, serialize_body
+
+    body_str = serialize_body(body)
+
+    def _send():
+        challenge = transport._fetch_challenge()
+        headers = dict(auth.auth_headers(password, challenge, path, body_str or ""))
+        if body_str is not None:
+            headers["Content-Type"] = "application/json"
+        method = "GET" if body_str is None else "POST"
+        return transport._session.request(
+            method,
+            transport.base_url + path,
+            data=body_str.encode("utf-8") if body_str is not None else None,
+            headers=headers,
+            timeout=transport.timeout,
+        )
+
+    resp = _send()
+    if resp.status_code == 401:
+        # A stale/consumed single-use challenge earns exactly one retry, just
+        # like the library's own transport; bad credentials are not retried.
+        try:
+            raise_for_status(resp.status_code, resp.text, path)
+        except Exception as exc:
+            if not auth.is_retryable_auth_failure(getattr(exc, "reason", "")):
+                raise
+            resp = _send()
+    raise_for_status(resp.status_code, resp.text, path)
+    return parse_body(resp.text)
+
+
 def library_version() -> Optional[str]:
     """Return the installed ``warpedpinball`` version, or ``None`` if absent.
 
@@ -64,6 +109,34 @@ def discover_machines(timeout: float = DEFAULT_DISCOVER_TIMEOUT) -> List:
     return _require_library().discover(timeout=timeout)
 
 
+def peers_from_ip(
+    ip: str, timeout: float = DEFAULT_DISCOVER_TIMEOUT
+) -> List[Tuple[str, Optional[str]]]:
+    """Fetch the whole board list from one known board over unicast HTTP.
+
+    Bypasses UDP broadcast discovery entirely: connecting straight to an IP
+    and reading the firmware's ``/api/network/peers`` returns every board that
+    one knows about (including itself), so a single reachable IP reveals the
+    whole network even on networks that drop broadcast/PONG traffic. Returns
+    ``(ip, name)`` pairs; ``name`` may be ``None``.
+    """
+    wp = _require_library()
+    machine = wp.connect(ip, timeout=timeout)
+    try:
+        payload = machine.peers()
+    finally:
+        try:
+            machine.close()
+        except Exception:
+            pass
+    results: List[Tuple[str, Optional[str]]] = []
+    if isinstance(payload, dict):
+        for peer_ip, info in payload.items():
+            name = info.get("name") if isinstance(info, dict) else None
+            results.append((str(peer_ip), str(name) if name else None))
+    return results
+
+
 def clamp_frequency_ms(frequency_ms: int) -> int:
     return max(
         BROADCAST_FREQUENCY_MIN_MS,
@@ -74,18 +147,34 @@ def clamp_frequency_ms(frequency_ms: int) -> int:
 class VectorConnection:
     """A connected Vector board plus the operations Memory Mapper needs."""
 
-    def __init__(self, machine, ip: str, name: Optional[str] = None):
+    def __init__(
+        self,
+        machine,
+        ip: str,
+        name: Optional[str] = None,
+        password: Optional[str] = None,
+    ):
         self.machine = machine
         self.ip = ip
         self.name = name
+        #: The password to authenticate with. ``None`` means "not set here, use
+        #: the machine's own"; an empty string is a real, valid (empty)
+        #: password and is signed as such rather than treated as absent.
+        self.password = password
         self.broadcast_enabled = False
 
     @property
     def label(self) -> str:
         return f"{self.name} ({self.ip})" if self.name else self.ip
 
+    @property
+    def _effective_password(self) -> Optional[str]:
+        """The password to sign with: this connection's, or the machine's."""
+        return self.password if self.password is not None else self.machine.password
+
     def has_password(self) -> bool:
-        return bool(self.machine.password)
+        # An empty string counts as a (valid) password; only ``None`` means none.
+        return self._effective_password is not None
 
     def _set_broadcast(
         self, enabled: bool, frequency_ms: int, ip: Optional[str] = None
@@ -93,18 +182,27 @@ class VectorConnection:
         """Toggle the memory stream, preferring the library wrapper when present.
 
         warpedpinball gained Machine.set_memory_broadcast() after 0.1.1; on
-        older versions fall back to calling the firmware route directly.
+        older versions fall back to calling the firmware route directly. When
+        the password is empty the library refuses to sign, so we sign the same
+        request ourselves via ``_signed_call`` (still the library's auth).
         """
-        set_broadcast = getattr(self.machine, "set_memory_broadcast", None)
-        if callable(set_broadcast):
-            set_broadcast(enabled, frequency_ms=frequency_ms, ip=ip)
-            return
         if enabled:
             body = {"enable": True, "frequency_ms": clamp_frequency_ms(frequency_ms)}
             if ip is not None:
                 body["ip"] = ip
         else:
             body = {"enable": False}
+
+        if not self._effective_password:
+            _signed_call(
+                self.machine.transport, "", TOGGLE_BROADCAST_ROUTE, body
+            )
+            return
+
+        set_broadcast = getattr(self.machine, "set_memory_broadcast", None)
+        if callable(set_broadcast):
+            set_broadcast(enabled, frequency_ms=frequency_ms, ip=ip)
+            return
         self.machine.call(TOGGLE_BROADCAST_ROUTE, body=body, authenticated=True)
 
     def enable_broadcast(
@@ -135,7 +233,24 @@ class VectorConnection:
         for value in values:
             if not (0 <= int(value) <= 255):
                 raise ValueError(f"byte value out of range 0-255: {value}")
-        self.machine.write_bytes(offset, [int(v) for v in values])
+        data = [int(v) for v in values]
+        if self._effective_password:
+            self.machine.write_bytes(offset, data)
+            return
+        # Empty password: the library won't sign, so chunk and sign ourselves,
+        # mirroring Machine.write_bytes' 256-byte-per-request chunking.
+        from warpedpinball.machine import ADDRESS_CHUNK
+
+        pos = 0
+        while pos < len(data):
+            chunk = data[pos : pos + ADDRESS_CHUNK]
+            _signed_call(
+                self.machine.transport,
+                "",
+                "/api/address/write",
+                {"offset": offset + pos, "values": chunk},
+            )
+            pos += len(chunk)
 
     def close(self) -> None:
         try:
@@ -157,7 +272,7 @@ def connect_machine(
     if not host:
         base_url = getattr(transport, "base_url", "")
         host = base_url.split("://", 1)[-1].rstrip("/") if base_url else name_or_ip
-    return VectorConnection(machine, ip=host, name=machine.name)
+    return VectorConnection(machine, ip=host, name=machine.name, password=password)
 
 
 class VectorManager:
@@ -174,8 +289,10 @@ class VectorManager:
         frequency_ms: int = DEFAULT_BROADCAST_FREQUENCY_MS,
         discover_timeout: float = DEFAULT_DISCOVER_TIMEOUT,
         target: Optional[str] = None,
+        seed_ips: Optional[List[str]] = None,
         discover_fn: Optional[Callable[..., List]] = None,
         connect_fn: Optional[Callable[..., VectorConnection]] = None,
+        peers_fn: Optional[Callable[..., List[Tuple[str, Optional[str]]]]] = None,
     ):
         self.frequency_ms = frequency_ms
         self.discover_timeout = discover_timeout
@@ -183,9 +300,21 @@ class VectorManager:
         self.target = target
         self._discover_fn = discover_fn or discover_machines
         self._connect_fn = connect_fn or connect_machine
-        self._password = password or None
+        self._peers_fn = peers_fn or peers_from_ip
+        # ``None`` means no password provided; an empty string is a valid
+        # (empty) password and is kept distinct from "not provided".
+        self._password = password
         self._password_generation = 0
-        self._machines: "OrderedDict[str, str]" = OrderedDict()  # ip -> name
+        self._machines: "OrderedDict[str, Optional[str]]" = OrderedDict()  # ip -> name
+        # Known board IPs to use directly, bypassing broadcast discovery (e.g.
+        # a --machine IP on a network that drops UDP broadcast). Seeded now so
+        # the board is usable immediately; the worker then expands it into the
+        # full network via that board's own peer list.
+        self._seed_ips: List[str] = [ip for ip in (seed_ips or []) if ip]
+        for ip in self._seed_ips:
+            self._machines.setdefault(ip, None)
+        self._seeds_enriched: bool = False
+        self._last_seed_error: Optional[str] = None
         self._connections: Dict[str, VectorConnection] = {}
         # ip -> (state, password_generation); state: pending/enabled/failed
         self._enable_state: Dict[str, Tuple[str, int]] = {}
@@ -229,15 +358,24 @@ class VectorManager:
 
     @property
     def password(self) -> Optional[str]:
-        return self._password or os.environ.get(PASSWORD_ENV_VAR)
+        # An explicitly-set password (including an empty one) wins; otherwise
+        # fall back to the environment. ``os.environ.get`` returns ``""`` for a
+        # deliberately-empty env var and ``None`` when it is unset.
+        if self._password is not None:
+            return self._password
+        return os.environ.get(PASSWORD_ENV_VAR)
 
     def has_password(self) -> bool:
-        return bool(self.password)
+        # An empty password is valid; only a truly-unset one counts as missing.
+        return self.password is not None
 
     def set_password(self, password: Optional[str]) -> None:
-        """Store a password and retry any machines that failed to enable."""
+        """Store a password and retry any machines that failed to enable.
+
+        An empty string is a valid (empty) password and is stored as such.
+        """
         with self._lock:
-            self._password = password or None
+            self._password = password
             self._password_generation += 1
             for ip, (state, gen) in list(self._enable_state.items()):
                 if state == "failed":
@@ -338,17 +476,52 @@ class VectorManager:
                 connection.name = connection.name or self._machines.get(ip)
                 self._connections[ip] = connection
             connection.machine.password = self.password
+            connection.password = self.password
             return connection
 
     def _run(self) -> None:
         next_discover = 0.0
         while not self._stop.is_set():
+            self._enrich_seeds()
             self._process_enable_requests()
             if time.monotonic() >= next_discover:
                 self._discover_once()
                 next_discover = time.monotonic() + DISCOVER_REST_INTERVAL
             self._wake.wait(timeout=0.25)
             self._wake.clear()
+
+    def _enrich_seeds(self) -> None:
+        """Expand seeded IPs into the full network via each board's peer list.
+
+        Runs until it succeeds once. Failures are surfaced (deduped) but the
+        seeded IP stays listed regardless, so the board remains usable — the
+        connect/enable path retries on selection — even if this never succeeds.
+        """
+        if self._seeds_enriched or not self._seed_ips:
+            return
+        got_any = False
+        for ip in list(self._seed_ips):
+            if self._stop.is_set():
+                return
+            try:
+                peers = self._peers_fn(ip, self.discover_timeout)
+            except Exception as exc:
+                message = f"Could not reach board {ip}: {exc}"
+                if message != self._last_seed_error:
+                    self._last_seed_error = message
+                    self._notice(message)
+                continue
+            got_any = True
+            with self._lock:
+                for peer_ip, name in peers:
+                    is_new = peer_ip not in self._machines
+                    if (is_new or self._machines.get(peer_ip) is None) and name:
+                        self._notice(f"Found {name} ({peer_ip})")
+                    if name or is_new:
+                        self._machines[peer_ip] = name or self._machines.get(peer_ip)
+        if got_any:
+            self._seeds_enriched = True
+            self._last_seed_error = None
 
     def _discover_once(self) -> None:
         try:

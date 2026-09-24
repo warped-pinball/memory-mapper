@@ -129,7 +129,8 @@ usage: memory-mapper [-h] [--version] [--machine NAME_OR_IP]
 │ 0000  00 01 02 03 04 FF 06 07 08 09 0A ...    │
 │ 0010  AB 11 12 13 14 15 16 17 18 19 1A ...    │
 │  ...                                          │
-└── Packets 123  Size 256B  Highlight 3.0s  ────┘
+└─ Rate 9.8/s  Refresh 4.0 Hz  Age 0.1s  Hard 2 ┘
+   Soft 1/0  Steps 3  Packets 123  Size 256B ...
 ┌──────────────── Cursor ───────────────────────┐
 │  Addr: 0x0005 (5)  Hex: 0xFF  Dec: 255        │
 │  Bin: 11111111  ASCII: ·                      │
@@ -148,7 +149,10 @@ usage: memory-mapper [-h] [--version] [--machine NAME_OR_IP]
 ```
 
 - **Memory panel** — a classic hex dump. A yellow background means the byte
-  changed within the last few seconds.
+  changed within the last few seconds. Its bottom border carries the live data
+  stats — packet rate, refresh rate (Hz), data age, scan match counts (Hard /
+  Soft), packets, size, and marked count — so they stay visible even when the
+  menu is hidden (in compact view the same line is printed under the hex).
 - **Cursor panel** — details for the byte under the cursor: address, hex,
   decimal, binary, ASCII, and recent value history.
 - **Legend** — the meaning of every highlight color.
@@ -184,6 +188,7 @@ be hidden independently so the hex dump gets as much room as possible:
 | `O` | Toggle the offset column and column-header row                      |
 | `U` | Toggle the cursor info panel                                        |
 | `V` | Toggle compact view (removes panel borders and padding)             |
+| `S` | Toggle the sources view — shows the machine list in place of the hex dump (BYTE mode only; in BIT mode `S` is the set(=1) scan) |
 | `?` | Toggle the About overlay (tool and `warpedpinball` versions; `Esc` also closes it) |
 
 ### Exporting
@@ -322,7 +327,11 @@ data from arriving.
 **No machines are being discovered.**
 Discovery uses UDP broadcast on port 37020, which does not cross routers,
 VPNs, or Wi-Fi client isolation. The tool keeps retrying in the background,
-so a machine that boots up later will still be found.
+so a machine that boots up later will still be found. If broadcast is blocked
+on your network and nothing ever shows up, point the tool straight at a board
+by IP: `memory-mapper --machine 192.168.1.50`. The board is then used directly
+and the rest of the network is read from its own peer list, so no broadcast is
+needed. (Open the board's web page in a browser to find its IP.)
 
 **Status says "Could not enable memory broadcast…".**
 The password was wrong, or the machine was unreachable. Press `P` to re-enter
